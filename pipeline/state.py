@@ -233,6 +233,24 @@ class StateDB:
             )
             conn.commit()
 
+    def reset_stuck(self) -> int:
+        """Reset jobs stuck in intermediate states back to pending."""
+        stuck_states = ['extracting', 'extracted', 'embedding', 'embedded']
+        with self._connect() as conn:
+            result = conn.execute(
+                f"""
+                UPDATE jobs SET
+                    status = 'pending',
+                    stage_failed = NULL,
+                    error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE status IN ({','.join('?' * len(stuck_states))})
+                """,
+                stuck_states
+            )
+            conn.commit()
+            return result.rowcount
+
     def get_stats(self) -> dict:
         """Get pipeline statistics."""
         with self._connect() as conn:

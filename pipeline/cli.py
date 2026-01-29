@@ -216,6 +216,26 @@ def discover():
     console.print(f"[green]Registered {added} new jobs[/green]")
 
 
+@app.command()
+def reset_stuck():
+    """Reset jobs stuck in intermediate states (extracting, extracted, embedding) back to pending."""
+    config = get_config()
+    state = StateDB(config.state_db_path)
+
+    stats = state.get_stats()
+    stuck_count = sum(stats.get(s, 0) for s in ['extracting', 'extracted', 'embedding', 'embedded'])
+
+    if stuck_count == 0:
+        console.print("[green]No stuck jobs[/green]")
+        return
+
+    if not typer.confirm(f"Reset {stuck_count} stuck jobs to pending?"):
+        raise typer.Abort()
+
+    reset = state.reset_stuck()
+    console.print(f"[green]Reset {reset} jobs to pending[/green]")
+
+
 def main():
     app()
 
