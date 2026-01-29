@@ -1,6 +1,7 @@
 """S3 operations for PDF pipeline."""
 
 import boto3
+from botocore.config import Config
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Iterator
@@ -13,10 +14,14 @@ class S3Client:
 
     def __init__(self, config: PipelineConfig):
         self.config = config
-        self.client = boto3.client("s3")
+        self.download_workers = 10  # Parallel download threads
+
+        # Set pool size larger than workers to avoid connection churn
+        boto_config = Config(max_pool_connections=self.download_workers + 5)
+        self.client = boto3.client("s3", config=boto_config)
+
         self.bucket = config.s3_bucket
         self.prefix = config.s3_prefix
-        self.download_workers = 10  # Parallel download threads
 
         # Ensure temp directory exists
         self.config.temp_dir.mkdir(parents=True, exist_ok=True)
