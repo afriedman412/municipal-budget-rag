@@ -37,7 +37,7 @@ logging.basicConfig(
 # Quiet down noisy loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.ERROR)  # Silence connection pool warnings
 
 
 def get_config() -> PipelineConfig:
