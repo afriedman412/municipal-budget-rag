@@ -217,6 +217,116 @@ def discover():
 
 
 @app.command()
+def preflight(
+    limit: int = typer.Option(0, help="Max PDFs to check (0 = all)"),
+    timeout: int = typer.Option(60, help="Timeout per PDF in seconds"),
+):
+    """
+    Run preflight checks on pending PDFs to identify problematic files.
+
+    Checks for: corrupted files, encryption, RichMedia, huge documents, etc.
+    Marks bad PDFs as failed so they're skipped during main pipeline run.
+    """
+    from tqdm import tqdm
+    from .s3 import S3Client
+    from .preflight import preflight_pdf, check_pdfinfo_available
+    from .state import JobStatus
+
+    config = get_config()
+    state = StateDB(config.state_db_path)
+    s3 = S3Client(config)
+
+    # Check for pdfinfo
+    has_pdfinfo = check_pdfinfo_available()
+    if not has_pdfinfo:
+        console.print("[yellow]Warning: pdfinfo not installed. Install poppler-utils for better checks.[/yellow]")
+        console.print("[yellow]  Ubuntu/Debian: sudo apt-get install poppler-utils[/yellow]")
+        console.print()
+
+    # Discover PDFs first
+    from .orchestrator import Pipeline
+    pipeline = Pipeline(config)
+    added = pipeline.discover_pdfs()
+    if added:
+        console.print(f"Registered {added} new jobs")
+
+    # Get pending jobs
+    pending = state.get_pending(JobStatus.EXTRACTING, limit=limit if limit > 0 else 100000)
+    if not pending:
+        console.print("[green]No pending jobs to check[/green]")
+        return
+
+    console.print(f"[bold]Running preflight checks on {len(pending)} PDFs...[/bold]")
+    console.print()
+
+    passed = 0
+    failed = 0
+    warnings = 0
+    issue_summary: dict[str, int] = {}
+
+    for job in tqdm(pending, desc="Preflight"):
+        try:
+            # Download PDF
+            local_path = s3.download_pdf(job.s3_key)
+
+            # Run preflight
+            result = preflight_pdf(local_path, timeout=timeout)
+
+            if not result.ok:
+                # Mark as failed
+                error_msg = "; ".join(result.issues[:3])
+                state.update_status(
+                    job.s3_key,
+                    JobStatus.FAILED,
+                    error_message=f"Preflight failed: {error_msg}",
+                    stage_failed="preflight"
+                )
+                failed += 1
+                for issue in result.issues:
+                    # Normalize issue for grouping
+                    key = issue.split(":")[0] if ":" in issue else issue[:50]
+                    issue_summary[key] = issue_summary.get(key, 0) + 1
+            elif result.issues:
+                # Has warnings but passed
+                warnings += 1
+                passed += 1
+            else:
+                passed += 1
+
+            # Cleanup
+            s3.cleanup_local(local_path)
+
+        except Exception as e:
+            # Download or other error
+            state.update_status(
+                job.s3_key,
+                JobStatus.FAILED,
+                error_message=f"Preflight error: {str(e)[:100]}",
+                stage_failed="preflight"
+            )
+            failed += 1
+            issue_summary["Download/other error"] = issue_summary.get("Download/other error", 0) + 1
+
+    # Summary
+    console.print()
+    console.print("[bold]Preflight Complete[/bold]")
+    console.print(f"  [green]Passed: {passed}[/green] ({warnings} with warnings)")
+    console.print(f"  [red]Failed: {failed}[/red]")
+
+    if issue_summary:
+        console.print()
+        table = Table(title="Issues Found")
+        table.add_column("Issue Type")
+        table.add_column("Count", justify="right")
+        for issue, count in sorted(issue_summary.items(), key=lambda x: -x[1]):
+            table.add_row(issue[:60], str(count))
+        console.print(table)
+
+    console.print()
+    console.print("[dim]Run 'python -m pipeline run' to process passed PDFs[/dim]")
+
+
+@app.command()
 def reset_stuck():
     """Reset jobs stuck in intermediate states (extracting, extracted, embedding) back to pending."""
     config = get_config()
