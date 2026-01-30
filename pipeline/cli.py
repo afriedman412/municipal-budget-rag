@@ -21,7 +21,7 @@ from rich.table import Table
 load_dotenv()
 
 from .config import PipelineConfig
-from .state import StateDB
+from .state import StateDB, JobStatus
 from .orchestrator import Pipeline
 from .chroma import ChromaClient
 
@@ -57,9 +57,52 @@ def run(
     batch_size: int = typer.Option(100, help="Batch size for processing"),
     workers: int = typer.Option(None, help="Override PDF worker count"),
     simple: bool = typer.Option(False, help="Use simple sequential mode (for debugging)"),
+    reset: bool = typer.Option(False, "--reset", "-r", help="Reset stuck jobs before running"),
+    do_preflight: bool = typer.Option(False, "--preflight", "-p", help="Run preflight checks before processing"),
 ):
     """Run the full pipeline: discover → extract → embed → index."""
     config = get_config()
+    state = StateDB(config.state_db_path)
+
+    # Reset stuck jobs if requested
+    if reset:
+        reset_count = state.reset_stuck()
+        if reset_count:
+            console.print(f"[yellow]Reset {reset_count} stuck jobs[/yellow]")
+
+    # Run preflight if requested
+    if do_preflight:
+        console.print("[bold]Running preflight checks...[/bold]")
+        from .s3 import S3Client
+        from .preflight import preflight_pdf_safe
+        from tqdm import tqdm
+
+        s3 = S3Client(config)
+        from .orchestrator import Pipeline
+        pipeline = Pipeline(config)
+        pipeline.discover_pdfs()
+
+        pending = state.get_pending(JobStatus.EXTRACTING, limit=100000)
+        failed_count = 0
+        pbar = tqdm(pending, desc="Preflight")
+        for job in pbar:
+            filename = job.s3_key.split('/')[-1]
+            pbar.set_postfix_str(filename[:40])
+            try:
+                local_path = s3.download_pdf(job.s3_key)
+                result = preflight_pdf_safe(local_path, timeout=60)
+                if not result.ok:
+                    error_msg = "; ".join(result.issues[:3])
+                    state.update_status(job.s3_key, JobStatus.FAILED,
+                                       error_message=f"Preflight: {error_msg}", stage_failed="preflight")
+                    failed_count += 1
+                s3.cleanup_local(local_path)
+            except Exception as e:
+                state.update_status(job.s3_key, JobStatus.FAILED,
+                                   error_message=f"Preflight error: {e}", stage_failed="preflight")
+                failed_count += 1
+        console.print(f"[yellow]Preflight complete: {failed_count} failed[/yellow]")
+        console.print()
 
     if workers:
         config.pdf_workers = workers
@@ -329,6 +372,41 @@ def preflight(
 
     console.print()
     console.print("[dim]Run 'python -m pipeline run' to process passed PDFs[/dim]")
+
+
+@app.command()
+def skip(
+    filename: str = typer.Argument(..., help="PDF filename or S3 key to mark as failed"),
+    reason: str = typer.Option("Manually skipped", "-r", "--reason", help="Reason for skipping"),
+):
+    """Mark a PDF as failed so it gets skipped during processing."""
+    config = get_config()
+    state = StateDB(config.state_db_path)
+
+    # Find the job - try exact match first, then partial match
+    with state._connect() as conn:
+        # Exact match
+        row = conn.execute("SELECT s3_key FROM jobs WHERE s3_key = ?", (filename,)).fetchone()
+
+        if not row:
+            # Partial match (filename at end of s3_key)
+            row = conn.execute(
+                "SELECT s3_key FROM jobs WHERE s3_key LIKE ?",
+                (f"%{filename}",)
+            ).fetchone()
+
+    if not row:
+        console.print(f"[red]No job found matching '{filename}'[/red]")
+        raise typer.Exit(1)
+
+    s3_key = row["s3_key"]
+    state.update_status(
+        s3_key,
+        JobStatus.FAILED,
+        error_message=reason,
+        stage_failed="manual"
+    )
+    console.print(f"[green]Marked as failed: {s3_key}[/green]")
 
 
 @app.command()
