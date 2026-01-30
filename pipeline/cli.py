@@ -78,9 +78,8 @@ def run(
         from tqdm import tqdm
 
         s3 = S3Client(config)
-        from .orchestrator import Pipeline
-        pipeline = Pipeline(config)
-        pipeline.discover_pdfs()
+        preflight_pipeline = Pipeline(config)
+        preflight_pipeline.discover_pdfs()
 
         pending = state.get_pending(JobStatus.EXTRACTING, limit=100000)
         failed_count = 0
