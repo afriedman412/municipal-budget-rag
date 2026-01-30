@@ -5,10 +5,14 @@ Catches issues that would crash or hang the main pipeline.
 """
 
 import subprocess
+import sys
 import os
+import json
 import logging
 from pathlib import Path
 from dataclasses import dataclass
+from multiprocessing import Process, Queue
+from queue import Empty
 
 logger = logging.getLogger(__name__)
 
@@ -164,3 +168,74 @@ def check_pdfinfo_available() -> bool:
         return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
+
+
+def _preflight_worker(path_str: str, timeout: int, result_queue: Queue):
+    """Worker function that runs in subprocess. Crashes here don't kill parent."""
+    try:
+        result = preflight_pdf(Path(path_str), timeout=timeout)
+        result_queue.put({
+            "ok": result.ok,
+            "issues": result.issues,
+            "page_count": result.page_count,
+            "file_size": result.file_size,
+        })
+    except Exception as e:
+        result_queue.put({
+            "ok": False,
+            "issues": [f"Worker exception: {str(e)}"],
+            "page_count": None,
+            "file_size": None,
+        })
+
+
+def preflight_pdf_safe(path: Path, timeout: int = 60) -> PreflightResult:
+    """
+    Run preflight in a subprocess so segfaults don't kill the main process.
+
+    If the subprocess crashes (segfault), returns a failed result.
+    """
+    result_queue = Queue()
+
+    proc = Process(target=_preflight_worker, args=(str(path), timeout, result_queue))
+    proc.start()
+    proc.join(timeout=timeout + 10)  # Give a bit more time than the internal timeout
+
+    if proc.is_alive():
+        # Timed out
+        proc.terminate()
+        proc.join(timeout=5)
+        if proc.is_alive():
+            proc.kill()
+        return PreflightResult(
+            ok=False,
+            issues=["Preflight timeout - PDF may be corrupted or very complex"],
+            page_count=None,
+            file_size=None
+        )
+
+    if proc.exitcode != 0:
+        # Crashed (segfault, etc.)
+        return PreflightResult(
+            ok=False,
+            issues=[f"Preflight crashed (exit code {proc.exitcode}) - PDF causes segfault"],
+            page_count=None,
+            file_size=None
+        )
+
+    # Get result from queue
+    try:
+        result_dict = result_queue.get_nowait()
+        return PreflightResult(
+            ok=result_dict["ok"],
+            issues=result_dict["issues"],
+            page_count=result_dict["page_count"],
+            file_size=result_dict["file_size"],
+        )
+    except Empty:
+        return PreflightResult(
+            ok=False,
+            issues=["No result from preflight worker - unknown error"],
+            page_count=None,
+            file_size=None
+        )

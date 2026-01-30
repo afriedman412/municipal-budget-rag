@@ -229,7 +229,7 @@ def preflight(
     """
     from tqdm import tqdm
     from .s3 import S3Client
-    from .preflight import preflight_pdf, check_pdfinfo_available
+    from .preflight import preflight_pdf_safe, check_pdfinfo_available
     from .state import JobStatus
 
     config = get_config()
@@ -264,13 +264,18 @@ def preflight(
     warnings = 0
     issue_summary: dict[str, int] = {}
 
-    for job in tqdm(pending, desc="Preflight"):
+    pbar = tqdm(pending, desc="Preflight")
+    for job in pbar:
+        # Show current file
+        filename = job.s3_key.split('/')[-1]
+        pbar.set_postfix_str(filename[:40])
+
         try:
             # Download PDF
             local_path = s3.download_pdf(job.s3_key)
 
-            # Run preflight
-            result = preflight_pdf(local_path, timeout=timeout)
+            # Run preflight in subprocess (crash-resistant)
+            result = preflight_pdf_safe(local_path, timeout=timeout)
 
             if not result.ok:
                 # Mark as failed
