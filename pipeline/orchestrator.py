@@ -297,6 +297,9 @@ class Pipeline:
                     break
 
                 batch.append(item)
+                # Show current file
+                filename = item.s3_key.split('/')[-1]
+                pbar.set_postfix_str(filename[:40])
 
                 if len(batch) >= embed_batch_size:
                     s, f = await self._embed_batch(batch)
@@ -344,7 +347,12 @@ class Pipeline:
             if not pending:
                 break
 
-            for job in tqdm(pending, desc="Processing"):
+            pbar = tqdm(pending, desc="Processing")
+            for job in pbar:
+                # Show current file
+                filename = job.s3_key.split('/')[-1]
+                pbar.set_postfix_str(filename[:40])
+
                 try:
                     # Download
                     local_path = self.s3.download_pdf(job.s3_key)
