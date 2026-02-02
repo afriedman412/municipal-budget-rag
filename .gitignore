@@ -10,6 +10,7 @@ env/
 .env
 pdfs_2026/
 notebooks/
+.claude/
 
 # Pipeline state and data
 *.db

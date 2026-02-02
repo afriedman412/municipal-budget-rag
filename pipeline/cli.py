@@ -9,6 +9,10 @@ Usage:
     python -m pipeline.cli retry        # Retry failed jobs
 """
 
+from .chroma import ChromaClient
+from .orchestrator import Pipeline
+from .state import StateDB, JobStatus
+from .config import PipelineConfig
 import asyncio
 import logging
 import sys
@@ -20,10 +24,6 @@ from rich.table import Table
 
 load_dotenv()
 
-from .config import PipelineConfig
-from .state import StateDB, JobStatus
-from .orchestrator import Pipeline
-from .chroma import ChromaClient
 
 app = typer.Typer(help="Municipal Budget PDF Pipeline")
 console = Console()
@@ -37,7 +37,8 @@ logging.basicConfig(
 # Quiet down noisy loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.ERROR)  # Silence connection pool warnings
+logging.getLogger("urllib3").setLevel(
+    logging.ERROR)  # Silence connection pool warnings
 
 
 def get_config() -> PipelineConfig:
@@ -46,7 +47,8 @@ def get_config() -> PipelineConfig:
 
     # Validate required settings
     if not config.s3_bucket:
-        console.print("[red]Error: S3_BUCKET environment variable not set[/red]")
+        console.print(
+            "[red]Error: S3_BUCKET environment variable not set[/red]")
         raise typer.Exit(1)
 
     return config
@@ -56,9 +58,12 @@ def get_config() -> PipelineConfig:
 def run(
     batch_size: int = typer.Option(100, help="Batch size for processing"),
     workers: int = typer.Option(None, help="Override PDF worker count"),
-    simple: bool = typer.Option(False, help="Use simple sequential mode (for debugging)"),
-    reset: bool = typer.Option(False, "--reset", "-r", help="Reset stuck jobs before running"),
-    do_preflight: bool = typer.Option(False, "--preflight", "-p", help="Run preflight checks before processing"),
+    simple: bool = typer.Option(
+        False, help="Use simple sequential mode (for debugging)"),
+    reset: bool = typer.Option(
+        False, "--reset", "-r", help="Reset stuck jobs before running"),
+    do_preflight: bool = typer.Option(
+        False, "--preflight", "-p", help="Run preflight checks before processing"),
 ):
     """Run the full pipeline: discover → extract → embed → index."""
     config = get_config()
@@ -93,14 +98,15 @@ def run(
                 if not result.ok:
                     error_msg = "; ".join(result.issues[:3])
                     state.update_status(job.s3_key, JobStatus.FAILED,
-                                       error_message=f"Preflight: {error_msg}", stage_failed="preflight")
+                                        error_message=f"Preflight: {error_msg}", stage_failed="preflight")
                     failed_count += 1
                 s3.cleanup_local(local_path)
             except Exception as e:
                 state.update_status(job.s3_key, JobStatus.FAILED,
-                                   error_message=f"Preflight error: {e}", stage_failed="preflight")
+                                    error_message=f"Preflight error: {e}", stage_failed="preflight")
                 failed_count += 1
-        console.print(f"[yellow]Preflight complete: {failed_count} failed[/yellow]")
+        console.print(
+            f"[yellow]Preflight complete: {failed_count} failed[/yellow]")
         console.print()
 
     if workers:
@@ -110,7 +116,8 @@ def run(
     console.print(f"  S3: s3://{config.s3_bucket}/{config.s3_prefix}")
     console.print(f"  Chroma: {config.chroma_host or 'local'}")
     console.print(f"  Workers: {config.pdf_workers}")
-    console.print(f"  Mode: {'sequential' if simple else 'parallel (producer-consumer)'}")
+    console.print(
+        f"  Mode: {'sequential' if simple else 'parallel (producer-consumer)'}")
     console.print()
 
     pipeline = Pipeline(config)
@@ -132,7 +139,8 @@ def status():
     table.add_column("Status", style="cyan")
     table.add_column("Count", justify="right")
 
-    status_order = ["pending", "extracting", "extracted", "embedding", "done", "failed"]
+    status_order = ["pending", "extracting",
+                    "extracted", "embedding", "done", "failed"]
     for s in status_order:
         count = stats.get(s, 0)
         style = "red" if s == "failed" and count > 0 else None
@@ -219,7 +227,8 @@ def retry(
 
     retryable = state.get_retryable(max_attempts)
     if not retryable:
-        console.print("[yellow]No jobs to retry (all exceeded max attempts)[/yellow]")
+        console.print(
+            "[yellow]No jobs to retry (all exceeded max attempts)[/yellow]")
         return
 
     console.print(f"Retrying {len(retryable)} failed jobs...")
@@ -281,8 +290,10 @@ def preflight(
     # Check for pdfinfo
     has_pdfinfo = check_pdfinfo_available()
     if not has_pdfinfo:
-        console.print("[yellow]Warning: pdfinfo not installed. Install poppler-utils for better checks.[/yellow]")
-        console.print("[yellow]  Ubuntu/Debian: sudo apt-get install poppler-utils[/yellow]")
+        console.print(
+            "[yellow]Warning: pdfinfo not installed. Install poppler-utils for better checks.[/yellow]")
+        console.print(
+            "[yellow]  Ubuntu/Debian: sudo apt-get install poppler-utils[/yellow]")
         console.print()
 
     # Discover PDFs first
@@ -293,12 +304,14 @@ def preflight(
         console.print(f"Registered {added} new jobs")
 
     # Get pending jobs
-    pending = state.get_pending(JobStatus.EXTRACTING, limit=limit if limit > 0 else 100000)
+    pending = state.get_pending(
+        JobStatus.EXTRACTING, limit=limit if limit > 0 else 100000)
     if not pending:
         console.print("[green]No pending jobs to check[/green]")
         return
 
-    console.print(f"[bold]Running preflight checks on {len(pending)} PDFs...[/bold]")
+    console.print(
+        f"[bold]Running preflight checks on {len(pending)} PDFs...[/bold]")
     console.print()
 
     passed = 0
@@ -352,12 +365,14 @@ def preflight(
                 stage_failed="preflight"
             )
             failed += 1
-            issue_summary["Download/other error"] = issue_summary.get("Download/other error", 0) + 1
+            issue_summary["Download/other error"] = issue_summary.get(
+                "Download/other error", 0) + 1
 
     # Summary
     console.print()
     console.print("[bold]Preflight Complete[/bold]")
-    console.print(f"  [green]Passed: {passed}[/green] ({warnings} with warnings)")
+    console.print(
+        f"  [green]Passed: {passed}[/green] ({warnings} with warnings)")
     console.print(f"  [red]Failed: {failed}[/red]")
 
     if issue_summary:
@@ -370,13 +385,16 @@ def preflight(
         console.print(table)
 
     console.print()
-    console.print("[dim]Run 'python -m pipeline run' to process passed PDFs[/dim]")
+    console.print(
+        "[dim]Run 'python -m pipeline run' to process passed PDFs[/dim]")
 
 
 @app.command()
 def skip(
-    filename: str = typer.Argument(..., help="PDF filename or S3 key to mark as failed"),
-    reason: str = typer.Option("Manually skipped", "-r", "--reason", help="Reason for skipping"),
+    filename: str = typer.Argument(...,
+                                   help="PDF filename or S3 key to mark as failed"),
+    reason: str = typer.Option(
+        "Manually skipped", "-r", "--reason", help="Reason for skipping"),
 ):
     """Mark a PDF as failed so it gets skipped during processing."""
     config = get_config()
@@ -385,7 +403,8 @@ def skip(
     # Find the job - try exact match first, then partial match
     with state._connect() as conn:
         # Exact match
-        row = conn.execute("SELECT s3_key FROM jobs WHERE s3_key = ?", (filename,)).fetchone()
+        row = conn.execute(
+            "SELECT s3_key FROM jobs WHERE s3_key = ?", (filename,)).fetchone()
 
         if not row:
             # Partial match (filename at end of s3_key)
@@ -415,7 +434,8 @@ def reset_stuck():
     state = StateDB(config.state_db_path)
 
     stats = state.get_stats()
-    stuck_count = sum(stats.get(s, 0) for s in ['extracting', 'extracted', 'embedding', 'embedded'])
+    stuck_count = sum(stats.get(s, 0)
+                      for s in ['extracting', 'extracted', 'embedding', 'embedded'])
 
     if stuck_count == 0:
         console.print("[green]No stuck jobs[/green]")
