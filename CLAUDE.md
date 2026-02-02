@@ -70,6 +70,18 @@ OPENAI_API_KEY    # For embeddings
 PDF_WORKERS       # Parallel PDF extraction processes (default: 8)
 ```
 
+### EC2 Instance
+```bash
+# Start the instance
+aws ec2 start-instances --instance-ids $(aws ec2 describe-instances --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+# Get the IP
+aws ec2 describe-instances --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
+
+# SSH in (instance name: budget-rag-ingest)
+ssh -i ~/.ssh/<your-key>.pem ubuntu@<ip>
+```
+
 ## Current Work
 
 Working on making the pipeline more robust and generalizable:

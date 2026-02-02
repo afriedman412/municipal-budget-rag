@@ -26,7 +26,7 @@ class PreflightResult:
     file_size: int | None = None
 
 
-def preflight_pdf(path: Path, timeout: int = 60) -> PreflightResult:
+def preflight_pdf(path: Path, timeout: int = 60, thorough: bool = False) -> PreflightResult:
     """
     Run preflight checks on a PDF file.
 
@@ -35,6 +35,11 @@ def preflight_pdf(path: Path, timeout: int = 60) -> PreflightResult:
     2. PDF header magic bytes
     3. pdfinfo validation (if available)
     4. MuPDF open test with annotation scanning
+
+    Args:
+        path: Path to PDF file
+        timeout: Timeout in seconds
+        thorough: If True, test text extraction on ALL pages (slower but catches more issues)
 
     Returns PreflightResult with ok=False if any critical issues found.
     """
@@ -105,8 +110,8 @@ def preflight_pdf(path: Path, timeout: int = 60) -> PreflightResult:
         if page_count is None:
             page_count = len(doc)
 
-        # Check for problematic annotations on first few pages
-        pages_to_check = min(5, len(doc))
+        # Check pages - either first 5 (quick) or all (thorough)
+        pages_to_check = len(doc) if thorough else min(5, len(doc))
         problematic_annotations = []
 
         for i in range(pages_to_check):
@@ -117,18 +122,23 @@ def preflight_pdf(path: Path, timeout: int = 60) -> PreflightResult:
                     annot_type = annot.type[1] if annot.type else "unknown"
                     if annot_type in ('RichMedia', 'Screen', '3D', 'Movie', 'Sound'):
                         problematic_annotations.append(f"{annot_type} on page {i+1}")
+
+                # In thorough mode, test text extraction on every page
+                if thorough:
+                    _ = page.get_text()
             except Exception as e:
                 issues.append(f"Error reading page {i+1}: {e}")
 
         if problematic_annotations:
             issues.append(f"Contains problematic content: {', '.join(problematic_annotations[:3])}")
 
-        # Try to access text on first page as smoke test
-        try:
-            if len(doc) > 0:
-                _ = doc[0].get_text()
-        except Exception as e:
-            issues.append(f"Text extraction test failed: {e}")
+        # In quick mode, just test first page text extraction
+        if not thorough:
+            try:
+                if len(doc) > 0:
+                    _ = doc[0].get_text()
+            except Exception as e:
+                issues.append(f"Text extraction test failed: {e}")
 
         doc.close()
 
@@ -170,10 +180,10 @@ def check_pdfinfo_available() -> bool:
         return False
 
 
-def _preflight_worker(path_str: str, timeout: int, result_queue: Queue):
+def _preflight_worker(path_str: str, timeout: int, thorough: bool, result_queue: Queue):
     """Worker function that runs in subprocess. Crashes here don't kill parent."""
     try:
-        result = preflight_pdf(Path(path_str), timeout=timeout)
+        result = preflight_pdf(Path(path_str), timeout=timeout, thorough=thorough)
         result_queue.put({
             "ok": result.ok,
             "issues": result.issues,
@@ -189,15 +199,20 @@ def _preflight_worker(path_str: str, timeout: int, result_queue: Queue):
         })
 
 
-def preflight_pdf_safe(path: Path, timeout: int = 60) -> PreflightResult:
+def preflight_pdf_safe(path: Path, timeout: int = 60, thorough: bool = False) -> PreflightResult:
     """
     Run preflight in a subprocess so segfaults don't kill the main process.
+
+    Args:
+        path: Path to PDF file
+        timeout: Timeout in seconds
+        thorough: If True, test text extraction on ALL pages (slower but catches more issues)
 
     If the subprocess crashes (segfault), returns a failed result.
     """
     result_queue = Queue()
 
-    proc = Process(target=_preflight_worker, args=(str(path), timeout, result_queue))
+    proc = Process(target=_preflight_worker, args=(str(path), timeout, thorough, result_queue))
     proc.start()
     proc.join(timeout=timeout + 10)  # Give a bit more time than the internal timeout
 

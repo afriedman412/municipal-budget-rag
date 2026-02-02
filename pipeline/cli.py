@@ -271,6 +271,9 @@ def discover():
 def preflight(
     limit: int = typer.Option(0, help="Max PDFs to check (0 = all)"),
     timeout: int = typer.Option(60, help="Timeout per PDF in seconds"),
+    thorough: bool = typer.Option(
+        False, "--thorough", "-t",
+        help="Test text extraction on ALL pages (slower but catches more crashers)"),
 ):
     """
     Run preflight checks on pending PDFs to identify problematic files.
@@ -310,8 +313,9 @@ def preflight(
         console.print("[green]No pending jobs to check[/green]")
         return
 
+    mode = "[yellow]thorough[/yellow] (all pages)" if thorough else "quick (first 5 pages)"
     console.print(
-        f"[bold]Running preflight checks on {len(pending)} PDFs...[/bold]")
+        f"[bold]Running preflight checks on {len(pending)} PDFs...[/bold] ({mode})")
     console.print()
 
     passed = 0
@@ -330,7 +334,7 @@ def preflight(
             local_path = s3.download_pdf(job.s3_key)
 
             # Run preflight in subprocess (crash-resistant)
-            result = preflight_pdf_safe(local_path, timeout=timeout)
+            result = preflight_pdf_safe(local_path, timeout=timeout, thorough=thorough)
 
             if not result.ok:
                 # Mark as failed

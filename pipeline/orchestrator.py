@@ -20,7 +20,7 @@ from tqdm import tqdm
 from .config import PipelineConfig
 from .state import StateDB, JobStatus
 from .s3 import S3Client
-from .extract import extract_pdf, ExtractedDocument
+from .extract import extract_pdf, extract_pdf_safe, ExtractedDocument
 from .embed import EmbeddingClient, document_to_chunks, EmbeddedChunk
 from .chroma import ChromaClient
 
@@ -37,15 +37,15 @@ class ExtractedJob:
 def _extract_single_pdf(args: tuple) -> tuple[str, ExtractedDocument | None, str | None]:
     """
     Worker function for parallel PDF extraction.
+    Uses subprocess isolation so segfaults don't kill the worker pool.
     Returns: (s3_key, extracted_doc or None, error_message or None)
     """
     s3_key, local_path = args
-    try:
-        doc = extract_pdf(Path(local_path), s3_key)
-        return (s3_key, doc, None)
-    except Exception as e:
-        error_msg = f"{type(e).__name__}: {str(e)}"
-        return (s3_key, None, error_msg)
+    result = extract_pdf_safe(Path(local_path), s3_key)
+    if result.success:
+        return (s3_key, result.document, None)
+    else:
+        return (s3_key, None, result.error)
 
 
 class Pipeline:
@@ -357,9 +357,22 @@ class Pipeline:
                     # Download
                     local_path = self.s3.download_pdf(job.s3_key)
 
-                    # Extract
+                    # Extract (crash-safe)
                     self.state.update_status(job.s3_key, JobStatus.EXTRACTING)
-                    doc = extract_pdf(local_path, job.s3_key)
+                    result = extract_pdf_safe(local_path, job.s3_key)
+
+                    if not result.success:
+                        self.state.update_status(
+                            job.s3_key,
+                            JobStatus.FAILED,
+                            error_message=result.error,
+                            stage_failed="extract"
+                        )
+                        failed += 1
+                        self.s3.cleanup_local(local_path)
+                        continue
+
+                    doc = result.document
 
                     # Embed
                     self.state.update_status(job.s3_key, JobStatus.EMBEDDING)
