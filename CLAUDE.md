@@ -12,6 +12,7 @@ PDF ingestion pipeline for municipal budget documents. Downloads PDFs from S3, e
 # Run the pipeline
 python -m pipeline run                    # Full pipeline (parallel producer-consumer)
 python -m pipeline run --simple           # Sequential mode (for debugging)
+python -m pipeline run -f "filename.pdf"  # Run a single file
 python -m pipeline run --preflight        # Run preflight checks first
 python -m pipeline run --reset            # Reset stuck jobs before running
 
@@ -19,7 +20,8 @@ python -m pipeline run --reset            # Reset stuck jobs before running
 python -m pipeline status                 # Show job counts by status
 python -m pipeline failures               # Show failed jobs and error summary
 python -m pipeline failures -v            # Show full error messages
-python -m pipeline preflight              # Run preflight checks on all pending PDFs
+python -m pipeline preflight              # Quick preflight (first 5 pages)
+python -m pipeline preflight --thorough   # Thorough preflight (all pages, catches more)
 python -m pipeline skip <filename>        # Mark a PDF as failed/skipped
 python -m pipeline reset-stuck            # Reset jobs stuck in intermediate states
 python -m pipeline retry                  # Retry failed jobs
@@ -86,6 +88,9 @@ ssh -i ~/.ssh/<your-key>.pem ubuntu@<ip>
 
 Working on making the pipeline more robust and generalizable:
 - Built preflight functionality to scan PDFs for errors before full ingestion
-- Added crash-resistant preflight (runs in subprocess to survive segfaults)
+- Added crash-resistant preflight and extraction (runs in subprocess to survive segfaults)
+- Thorough preflight mode (`--thorough`) tests all pages and records which pages fail
+- Page-level skipping: if specific pages crash, skip just those pages, not the whole file
+- Single file mode (`run -f`) for testing/debugging individual files
 - Improved CLI with file names in tqdm progress bar
 - Goal: make this useful for others who want to ingest PDFs into a RAG system

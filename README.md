@@ -28,6 +28,9 @@ python -m pipeline run
 # Sequential mode (useful for debugging)
 python -m pipeline run --simple
 
+# Run a single file (prompts if file is marked failed)
+python -m pipeline run -f "ca_phoenix_23.pdf"
+
 # Run preflight checks before processing
 python -m pipeline run --preflight
 
@@ -50,6 +53,7 @@ Scan PDFs for problems before processing. Catches corrupted files, encryption, p
 python -m pipeline preflight
 
 # Thorough preflight (tests ALL pages - slower but catches more crashers)
+# Records which specific pages fail so extraction can skip just those pages
 python -m pipeline preflight --thorough
 
 # Limit number of PDFs to check
@@ -58,6 +62,8 @@ python -m pipeline preflight --limit 100
 # Adjust timeout per PDF
 python -m pipeline preflight --timeout 120
 ```
+
+**Page-level skipping:** In thorough mode, if specific pages fail but the rest of the PDF is OK, those pages are recorded and skipped during extraction. You get partial documents instead of losing the whole file.
 
 ### Status & Monitoring
 
@@ -109,6 +115,7 @@ S3 (PDFs) → Download → Extract (PyMuPDF) → Embed (OpenAI) → ChromaDB
 **Crash Resistance:**
 - Preflight runs in subprocess to survive segfaults
 - Extraction is subprocess-isolated so bad PDFs don't kill the pipeline
+- Page-level skipping: bad pages are skipped, rest of document is extracted
 - Failed jobs are tracked and can be retried
 
 ## PDF Filename Convention
