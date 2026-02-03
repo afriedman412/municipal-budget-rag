@@ -30,7 +30,7 @@ class ExtractedDocument:
         return len(self.pages)
 
 
-def extract_pdf(pdf_path: Path, s3_key: str, skip_pages: list[int] | None = None) -> ExtractedDocument:
+def extract_pdf(pdf_path: Path, s3_key: str, skip_pages: list[int] | None = None, show_progress: bool = False) -> ExtractedDocument:
     """
     Extract text from a PDF file.
 
@@ -38,16 +38,23 @@ def extract_pdf(pdf_path: Path, s3_key: str, skip_pages: list[int] | None = None
         pdf_path: Local path to PDF file
         s3_key: Original S3 key (for metadata parsing)
         skip_pages: List of 1-indexed page numbers to skip (e.g., pages that cause crashes)
+        show_progress: Show tqdm progress bar for pages
 
     Returns:
         ExtractedDocument with pages and metadata
     """
+    from tqdm import tqdm
+
     skip_set = set(skip_pages) if skip_pages else set()
     doc = fitz.open(str(pdf_path))
     pages = []
 
     try:
-        for page_num in range(len(doc)):
+        page_iter = range(len(doc))
+        if show_progress:
+            page_iter = tqdm(page_iter, desc="  Pages", unit="pg")
+
+        for page_num in page_iter:
             page_num_1indexed = page_num + 1
             if page_num_1indexed in skip_set:
                 continue  # Skip this page

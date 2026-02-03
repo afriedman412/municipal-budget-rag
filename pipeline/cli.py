@@ -54,10 +54,10 @@ def get_config() -> PipelineConfig:
     return config
 
 
-def _run_single_file(config: PipelineConfig, state: StateDB, filename: str):
-    """Run pipeline on a single file."""
+def _run_single_file(config: PipelineConfig, state: StateDB, filename: str, timeout: int = 600):
+    """Run pipeline on a single file (with progress, no subprocess isolation)."""
     from .s3 import S3Client
-    from .extract import extract_pdf_safe
+    from .extract import extract_pdf
     from .embed import EmbeddingClient, document_to_chunks
     from .chroma import ChromaClient
 
@@ -97,23 +97,15 @@ def _run_single_file(config: PipelineConfig, state: StateDB, filename: str):
         console.print("Downloading...")
         local_path = s3.download_pdf(job.s3_key)
 
-        console.print("Extracting...")
+        console.print("Extracting (with page progress)...")
         state.update_status(job.s3_key, JobStatus.EXTRACTING)
-        result = extract_pdf_safe(local_path, job.s3_key, skip_pages=job.skip_pages)
-
-        if not result.success:
-            console.print(f"[red]Extraction failed: {result.error}[/red]")
-            state.update_status(
-                job.s3_key, JobStatus.FAILED,
-                error_message=result.error, stage_failed="extract"
-            )
-            s3.cleanup_local(local_path)
-            raise typer.Exit(1)
-
-        doc = result.document
-        console.print(f"  Extracted {doc.page_count} pages")
         if job.skip_pages:
-            console.print(f"  [yellow]Skipped pages: {job.skip_pages}[/yellow]")
+            console.print(f"  [yellow]Skipping pages: {job.skip_pages}[/yellow]")
+
+        # Use direct extraction with progress bar (no subprocess isolation for single file)
+        doc = extract_pdf(local_path, job.s3_key, skip_pages=job.skip_pages, show_progress=True)
+
+        console.print(f"  Extracted {doc.page_count} pages")
 
         console.print("Embedding...")
         state.update_status(job.s3_key, JobStatus.EMBEDDING)
@@ -149,6 +141,8 @@ def run(
         False, "--preflight", "-p", help="Run preflight checks before processing"),
     file: str = typer.Option(
         None, "--file", "-f", help="Run a single file by name"),
+    timeout: int = typer.Option(
+        600, "--timeout", "-t", help="Extraction timeout in seconds (for single file mode)"),
 ):
     """Run the full pipeline: discover → extract → embed → index."""
     config = get_config()
@@ -156,7 +150,7 @@ def run(
 
     # Single file mode
     if file:
-        _run_single_file(config, state, file)
+        _run_single_file(config, state, file, timeout=timeout)
         return
 
     # Reset stuck jobs if requested

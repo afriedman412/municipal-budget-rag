@@ -40,34 +40,38 @@ class ChromaClient:
             metadata={"description": "Municipal budget documents"}
         )
 
-    def add_chunks(self, chunks: list[EmbeddedChunk]) -> int:
+    def add_chunks(self, chunks: list[EmbeddedChunk], batch_size: int = 5000) -> int:
         """Add embedded chunks to the collection. Returns count added."""
         if not chunks:
             return 0
 
-        ids = [c.chunk.chunk_id for c in chunks]
-        embeddings = [c.embedding for c in chunks]
-        documents = [c.chunk.text for c in chunks]
-        metadatas = [
-            {
-                "source": c.chunk.filename,
-                "s3_key": c.chunk.s3_key,
-                "page": c.chunk.page_num,
-                "chunk": c.chunk.chunk_idx,
-                "city": c.chunk.city,
-                "state": c.chunk.state,
-                "year": c.chunk.year,
-            }
-            for c in chunks
-        ]
+        # Batch to avoid ChromaDB's max batch size limit (5461)
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
 
-        # ChromaDB handles duplicates by ID
-        self.collection.upsert(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas,
-        )
+            ids = [c.chunk.chunk_id for c in batch]
+            embeddings = [c.embedding for c in batch]
+            documents = [c.chunk.text for c in batch]
+            metadatas = [
+                {
+                    "source": c.chunk.filename,
+                    "s3_key": c.chunk.s3_key,
+                    "page": c.chunk.page_num,
+                    "chunk": c.chunk.chunk_idx,
+                    "city": c.chunk.city,
+                    "state": c.chunk.state,
+                    "year": c.chunk.year,
+                }
+                for c in batch
+            ]
+
+            # ChromaDB handles duplicates by ID
+            self.collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas,
+            )
 
         return len(chunks)
 
