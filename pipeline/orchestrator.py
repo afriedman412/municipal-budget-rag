@@ -40,8 +40,8 @@ def _extract_single_pdf(args: tuple) -> tuple[str, ExtractedDocument | None, str
     Uses subprocess isolation so segfaults don't kill the worker pool.
     Returns: (s3_key, extracted_doc or None, error_message or None)
     """
-    s3_key, local_path = args
-    result = extract_pdf_safe(Path(local_path), s3_key)
+    s3_key, local_path, skip_pages = args
+    result = extract_pdf_safe(Path(local_path), s3_key, skip_pages=skip_pages)
     if result.success:
         return (s3_key, result.document, None)
     else:
@@ -89,9 +89,11 @@ class Pipeline:
             if not pending:
                 break
 
-            # Mark all as extracting
+            # Mark all as extracting and build lookup for skip_pages
+            job_lookup = {}
             for job in pending:
                 self.state.update_status(job.s3_key, JobStatus.EXTRACTING)
+                job_lookup[job.s3_key] = job
 
             # Parallel download
             s3_keys = [job.s3_key for job in pending]
@@ -108,7 +110,8 @@ class Pipeline:
                         stage_failed="download"
                     )
                 else:
-                    work_items.append((s3_key, str(local_path)))
+                    skip_pages = job_lookup[s3_key].skip_pages
+                    work_items.append((s3_key, str(local_path), skip_pages))
 
             if not work_items:
                 continue
@@ -357,9 +360,9 @@ class Pipeline:
                     # Download
                     local_path = self.s3.download_pdf(job.s3_key)
 
-                    # Extract (crash-safe)
+                    # Extract (crash-safe, with page skipping if preflight identified bad pages)
                     self.state.update_status(job.s3_key, JobStatus.EXTRACTING)
-                    result = extract_pdf_safe(local_path, job.s3_key)
+                    result = extract_pdf_safe(local_path, job.s3_key, skip_pages=job.skip_pages)
 
                     if not result.success:
                         self.state.update_status(

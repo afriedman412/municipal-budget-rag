@@ -24,6 +24,7 @@ class PreflightResult:
     issues: list[str]
     page_count: int | None = None
     file_size: int | None = None
+    failed_pages: list[int] | None = None  # Page numbers that failed (1-indexed)
 
 
 def preflight_pdf(path: Path, timeout: int = 60, thorough: bool = False) -> PreflightResult:
@@ -103,6 +104,7 @@ def preflight_pdf(path: Path, timeout: int = 60, thorough: bool = False) -> Pref
         logger.debug(f"pdfinfo error: {e}")
 
     # 4. MuPDF open test - catches many issues pdfinfo misses
+    failed_pages = []
     try:
         import fitz
         doc = fitz.open(str(path))
@@ -128,6 +130,8 @@ def preflight_pdf(path: Path, timeout: int = 60, thorough: bool = False) -> Pref
                     _ = page.get_text()
             except Exception as e:
                 issues.append(f"Error reading page {i+1}: {e}")
+                if thorough:
+                    failed_pages.append(i + 1)  # 1-indexed
 
         if problematic_annotations:
             issues.append(f"Contains problematic content: {', '.join(problematic_annotations[:3])}")
@@ -152,7 +156,7 @@ def preflight_pdf(path: Path, timeout: int = 60, thorough: bool = False) -> Pref
         else:
             issues.append(f"MuPDF open failed: {error_msg[:100]}")
 
-    # Determine if critical (should skip) vs warning (can try)
+    # Determine if critical (should skip entire file) vs warning (can try)
     critical_keywords = [
         'encrypted', 'password', 'Invalid PDF', 'corrupted',
         'too small', 'Cannot read', 'RichMedia', '3D', 'Movie'
@@ -163,9 +167,20 @@ def preflight_pdf(path: Path, timeout: int = 60, thorough: bool = False) -> Pref
         for issue in issues
     )
 
+    # In thorough mode: if only some pages failed, file is still OK (we'll skip those pages)
+    # Only fail if ALL pages failed or there's a critical global error
+    if thorough and failed_pages and page_count:
+        if len(failed_pages) >= page_count:
+            has_critical = True  # All pages failed
+            issues.append("All pages failed extraction test")
+        elif not has_critical:
+            # Some pages failed but file is usable - mark as OK with failed_pages list
+            issues.append(f"Pages {failed_pages} will be skipped during extraction")
+
     return PreflightResult(
         ok=not has_critical,
         issues=issues,
+        failed_pages=failed_pages if failed_pages else None,
         page_count=page_count,
         file_size=file_size
     )
@@ -189,6 +204,7 @@ def _preflight_worker(path_str: str, timeout: int, thorough: bool, result_queue:
             "issues": result.issues,
             "page_count": result.page_count,
             "file_size": result.file_size,
+            "failed_pages": result.failed_pages,
         })
     except Exception as e:
         result_queue.put({
@@ -196,6 +212,7 @@ def _preflight_worker(path_str: str, timeout: int, thorough: bool, result_queue:
             "issues": [f"Worker exception: {str(e)}"],
             "page_count": None,
             "file_size": None,
+            "failed_pages": None,
         })
 
 
@@ -246,11 +263,13 @@ def preflight_pdf_safe(path: Path, timeout: int = 60, thorough: bool = False) ->
             issues=result_dict["issues"],
             page_count=result_dict["page_count"],
             file_size=result_dict["file_size"],
+            failed_pages=result_dict.get("failed_pages"),
         )
     except Empty:
         return PreflightResult(
             ok=False,
             issues=["No result from preflight worker - unknown error"],
             page_count=None,
-            file_size=None
+            file_size=None,
+            failed_pages=None
         )

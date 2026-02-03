@@ -30,22 +30,28 @@ class ExtractedDocument:
         return len(self.pages)
 
 
-def extract_pdf(pdf_path: Path, s3_key: str) -> ExtractedDocument:
+def extract_pdf(pdf_path: Path, s3_key: str, skip_pages: list[int] | None = None) -> ExtractedDocument:
     """
     Extract text from a PDF file.
 
     Args:
         pdf_path: Local path to PDF file
         s3_key: Original S3 key (for metadata parsing)
+        skip_pages: List of 1-indexed page numbers to skip (e.g., pages that cause crashes)
 
     Returns:
         ExtractedDocument with pages and metadata
     """
+    skip_set = set(skip_pages) if skip_pages else set()
     doc = fitz.open(str(pdf_path))
     pages = []
 
     try:
         for page_num in range(len(doc)):
+            page_num_1indexed = page_num + 1
+            if page_num_1indexed in skip_set:
+                continue  # Skip this page
+
             page = doc[page_num]
             text = page.get_text()
 
@@ -55,7 +61,7 @@ def extract_pdf(pdf_path: Path, s3_key: str) -> ExtractedDocument:
 
             if text:  # Skip empty pages
                 pages.append(ExtractedPage(
-                    page_num=page_num + 1,
+                    page_num=page_num_1indexed,
                     text=text
                 ))
     finally:
@@ -169,10 +175,10 @@ class ExtractResult:
     error: str | None
 
 
-def _extract_worker(pdf_path_str: str, s3_key: str, result_queue: Queue):
+def _extract_worker(pdf_path_str: str, s3_key: str, skip_pages: list[int] | None, result_queue: Queue):
     """Worker function that runs in subprocess. Crashes here don't kill parent."""
     try:
-        doc = extract_pdf(Path(pdf_path_str), s3_key)
+        doc = extract_pdf(Path(pdf_path_str), s3_key, skip_pages=skip_pages)
         # Serialize the document for queue transfer
         result_queue.put({
             "success": True,
@@ -194,7 +200,7 @@ def _extract_worker(pdf_path_str: str, s3_key: str, result_queue: Queue):
         })
 
 
-def extract_pdf_safe(pdf_path: Path, s3_key: str, timeout: int = 300) -> ExtractResult:
+def extract_pdf_safe(pdf_path: Path, s3_key: str, timeout: int = 300, skip_pages: list[int] | None = None) -> ExtractResult:
     """
     Extract PDF in a subprocess so segfaults don't kill the main process.
 
@@ -202,13 +208,14 @@ def extract_pdf_safe(pdf_path: Path, s3_key: str, timeout: int = 300) -> Extract
         pdf_path: Local path to PDF file
         s3_key: Original S3 key
         timeout: Timeout in seconds (default 5 minutes for large PDFs)
+        skip_pages: List of 1-indexed page numbers to skip
 
     Returns:
         ExtractResult with success status and document or error
     """
     result_queue = Queue()
 
-    proc = Process(target=_extract_worker, args=(str(pdf_path), s3_key, result_queue))
+    proc = Process(target=_extract_worker, args=(str(pdf_path), s3_key, skip_pages, result_queue))
     proc.start()
     proc.join(timeout=timeout)
 

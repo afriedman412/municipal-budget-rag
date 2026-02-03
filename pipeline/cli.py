@@ -54,6 +54,89 @@ def get_config() -> PipelineConfig:
     return config
 
 
+def _run_single_file(config: PipelineConfig, state: StateDB, filename: str):
+    """Run pipeline on a single file."""
+    from .s3 import S3Client
+    from .extract import extract_pdf_safe
+    from .embed import EmbeddingClient, document_to_chunks
+    from .chroma import ChromaClient
+
+    # Find the job
+    with state._connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE s3_key = ?", (filename,)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE s3_key LIKE ?", (f"%{filename}",)
+            ).fetchone()
+
+    if not row:
+        console.print(f"[red]No job found matching '{filename}'[/red]")
+        raise typer.Exit(1)
+
+    job = state._row_to_job(row)
+    console.print(f"Found: {job.s3_key}")
+
+    # Warn if failed
+    if job.status == JobStatus.FAILED:
+        console.print(f"[yellow]Warning: This file is marked as FAILED[/yellow]")
+        console.print(f"  Stage: {job.stage_failed}")
+        console.print(f"  Error: {job.error_message}")
+        if not typer.confirm("Process anyway?"):
+            raise typer.Abort()
+        # Reset to pending
+        state.reset_for_retry(job.s3_key)
+
+    # Process the file
+    s3 = S3Client(config)
+    embedder = EmbeddingClient(config)
+    chroma = ChromaClient(config)
+
+    try:
+        console.print("Downloading...")
+        local_path = s3.download_pdf(job.s3_key)
+
+        console.print("Extracting...")
+        state.update_status(job.s3_key, JobStatus.EXTRACTING)
+        result = extract_pdf_safe(local_path, job.s3_key, skip_pages=job.skip_pages)
+
+        if not result.success:
+            console.print(f"[red]Extraction failed: {result.error}[/red]")
+            state.update_status(
+                job.s3_key, JobStatus.FAILED,
+                error_message=result.error, stage_failed="extract"
+            )
+            s3.cleanup_local(local_path)
+            raise typer.Exit(1)
+
+        doc = result.document
+        console.print(f"  Extracted {doc.page_count} pages")
+        if job.skip_pages:
+            console.print(f"  [yellow]Skipped pages: {job.skip_pages}[/yellow]")
+
+        console.print("Embedding...")
+        state.update_status(job.s3_key, JobStatus.EMBEDDING)
+        chunks = document_to_chunks(doc)
+
+        if chunks:
+            embedded = asyncio.run(embedder.embed_chunks(chunks))
+            chroma.add_chunks(embedded)
+            console.print(f"  Indexed {len(chunks)} chunks")
+
+        state.update_status(job.s3_key, JobStatus.DONE)
+        s3.cleanup_local(local_path)
+        console.print("[green]Done![/green]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        state.update_status(
+            job.s3_key, JobStatus.FAILED,
+            error_message=str(e), stage_failed="unknown"
+        )
+        raise typer.Exit(1)
+
+
 @app.command()
 def run(
     batch_size: int = typer.Option(100, help="Batch size for processing"),
@@ -64,10 +147,17 @@ def run(
         False, "--reset", "-r", help="Reset stuck jobs before running"),
     do_preflight: bool = typer.Option(
         False, "--preflight", "-p", help="Run preflight checks before processing"),
+    file: str = typer.Option(
+        None, "--file", "-f", help="Run a single file by name"),
 ):
     """Run the full pipeline: discover → extract → embed → index."""
     config = get_config()
     state = StateDB(config.state_db_path)
+
+    # Single file mode
+    if file:
+        _run_single_file(config, state, file)
+        return
 
     # Reset stuck jobs if requested
     if reset:
@@ -350,11 +440,15 @@ def preflight(
                     # Normalize issue for grouping
                     key = issue.split(":")[0] if ":" in issue else issue[:50]
                     issue_summary[key] = issue_summary.get(key, 0) + 1
-            elif result.issues:
-                # Has warnings but passed
-                warnings += 1
-                passed += 1
             else:
+                # Passed - but save any failed pages for extraction to skip
+                if result.failed_pages:
+                    state.set_skip_pages(job.s3_key, result.failed_pages)
+                    warnings += 1
+                    issue_summary[f"Partial ({len(result.failed_pages)} pages skipped)"] = \
+                        issue_summary.get(f"Partial ({len(result.failed_pages)} pages skipped)", 0) + 1
+                elif result.issues:
+                    warnings += 1
                 passed += 1
 
             # Cleanup

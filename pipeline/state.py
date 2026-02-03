@@ -5,6 +5,7 @@ Tracks each PDF through stages: pending → extracted → embedded → done
 Records failures with error messages for debugging.
 """
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ class Job:
     state: str | None = None
     year: int | None = None
     page_count: int | None = None
+    skip_pages: list[int] | None = None  # Pages to skip during extraction (1-indexed)
 
 
 class StateDB:
@@ -61,6 +63,7 @@ class StateDB:
                     state TEXT,
                     year INTEGER,
                     page_count INTEGER,
+                    skip_pages TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -69,6 +72,11 @@ class StateDB:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status)
             """)
+            # Migration: add skip_pages column if it doesn't exist
+            try:
+                conn.execute("ALTER TABLE jobs ADD COLUMN skip_pages TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             conn.commit()
 
     @contextmanager
@@ -169,6 +177,8 @@ class StateDB:
                     (status.value, stage_failed, error_message, s3_key)
                 )
             elif metadata:
+                skip_pages = metadata.get("skip_pages")
+                skip_pages_json = json.dumps(skip_pages) if skip_pages else None
                 conn.execute(
                     """
                     UPDATE jobs SET
@@ -177,6 +187,7 @@ class StateDB:
                         state = ?,
                         year = ?,
                         page_count = ?,
+                        skip_pages = ?,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE s3_key = ?
                     """,
@@ -186,6 +197,7 @@ class StateDB:
                         metadata.get("state"),
                         metadata.get("year"),
                         metadata.get("page_count"),
+                        skip_pages_json,
                         s3_key,
                     )
                 )
@@ -230,6 +242,21 @@ class StateDB:
                 WHERE status = 'failed' AND attempts < ?
                 """,
                 (max_attempts,)
+            )
+            conn.commit()
+
+    def set_skip_pages(self, s3_key: str, skip_pages: list[int] | None):
+        """Set pages to skip during extraction."""
+        with self._connect() as conn:
+            skip_pages_json = json.dumps(skip_pages) if skip_pages else None
+            conn.execute(
+                """
+                UPDATE jobs SET
+                    skip_pages = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE s3_key = ?
+                """,
+                (skip_pages_json, s3_key)
             )
             conn.commit()
 
@@ -285,6 +312,12 @@ class StateDB:
 
     def _row_to_job(self, row: sqlite3.Row) -> Job:
         """Convert a database row to a Job object."""
+        skip_pages = None
+        if row["skip_pages"]:
+            try:
+                skip_pages = json.loads(row["skip_pages"])
+            except json.JSONDecodeError:
+                pass
         return Job(
             s3_key=row["s3_key"],
             status=JobStatus(row["status"]),
@@ -295,6 +328,7 @@ class StateDB:
             state=row["state"],
             year=row["year"],
             page_count=row["page_count"],
+            skip_pages=skip_pages,
             created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
             updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
         )
