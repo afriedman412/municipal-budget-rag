@@ -131,7 +131,7 @@ def _run_single_file(config: PipelineConfig, state: StateDB, filename: str, time
 
 @app.command()
 def run(
-    batch_size: int = typer.Option(100, help="Batch size for processing"),
+    batch_size: int = typer.Option(None, help="Batch size for download/extract (defaults to worker count)"),
     workers: int = typer.Option(None, help="Override PDF worker count"),
     simple: bool = typer.Option(
         False, help="Use simple sequential mode (for debugging)"),
@@ -143,6 +143,8 @@ def run(
         None, "--file", "-f", help="Run a single file by name"),
     timeout: int = typer.Option(
         600, "--timeout", "-t", help="Extraction timeout in seconds (for single file mode)"),
+    use_rich: bool = typer.Option(
+        False, "--rich", "-m", help="Use Rich live dashboard instead of tqdm progress bar"),
 ):
     """Run the full pipeline: discover → extract → embed → index."""
     config = get_config()
@@ -206,9 +208,9 @@ def run(
 
     pipeline = Pipeline(config)
     if simple:
-        asyncio.run(pipeline.run_simple(batch_size=batch_size))
+        asyncio.run(pipeline.run_simple(batch_size=batch_size, use_rich=use_rich))
     else:
-        asyncio.run(pipeline.run(batch_size=batch_size))
+        asyncio.run(pipeline.run(batch_size=batch_size, use_rich=use_rich))
 
 
 @app.command()

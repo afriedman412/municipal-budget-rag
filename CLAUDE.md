@@ -15,6 +15,8 @@ python -m pipeline run --simple           # Sequential mode (for debugging)
 python -m pipeline run -f "filename.pdf"  # Run a single file
 python -m pipeline run --preflight        # Run preflight checks first
 python -m pipeline run --reset            # Reset stuck jobs before running
+python -m pipeline run --rich             # Use Rich live dashboard instead of tqdm
+python -m pipeline run -m                 # Same as --rich (shortcut)
 
 # Pipeline management
 python -m pipeline status                 # Show job counts by status
@@ -42,9 +44,16 @@ S3 (PDFs) → Download → Extract (PyMuPDF) → Embed (OpenAI) → ChromaDB
 
 - **cli.py**: Typer-based CLI with commands for running pipeline, checking status, managing failures
 - **orchestrator.py**: Main `Pipeline` class with producer-consumer architecture
-  - Producer thread: downloads + extracts PDFs in parallel (CPU-bound, ProcessPoolExecutor)
+  - Producer thread: downloads batches + extracts in parallel (ThreadPoolExecutor)
+  - Uses ThreadPoolExecutor (not ProcessPoolExecutor) because `extract_pdf_safe` spawns subprocesses
+  - Uses `as_completed()` for real-time progress as extractions finish
+  - Batch size defaults to worker count (PDF_WORKERS env var)
   - Consumer: embeds + indexes async (I/O-bound, batched)
-  - Queue connects them for pipeline parallelism
+  - asyncio.Queue connects them (use `loop.call_soon_threadsafe()` for producer → consumer)
+- **rich_monitor.py**: Optional Rich-based live dashboard for monitoring pipeline progress
+  - Shows: phase (downloading/extracting), current files, extracted/embedded counts, rates, batch progress, queue depth, errors
+  - Extraction progress: shows files being processed (multiline) and counts (e.g., "extracting (3/8)")
+  - Thread-safe callback-based updates, auto-disables if not TTY
 - **preflight.py**: Pre-flight checks to identify problematic PDFs before extraction
   - Runs checks in subprocess so segfaults don't kill main process
   - Catches: corrupted files, encryption, RichMedia annotations, huge documents
@@ -91,6 +100,28 @@ Working on making the pipeline more robust and generalizable:
 - Added crash-resistant preflight and extraction (runs in subprocess to survive segfaults)
 - Thorough preflight mode (`--thorough`) tests all pages and records which pages fail
 - Page-level skipping: if specific pages crash, skip just those pages, not the whole file
-- Single file mode (`run -f`) for testing/debugging individual files
-- Improved CLI with file names in tqdm progress bar
-- Goal: make this useful for others who want to ingest PDFs into a RAG system
+- Single file mode (`run -f`) for testing/debugging individual files with page-level tqdm
+- Fixed ChromaDB batch size limit (was failing on docs with >5461 chunks)
+- Fixed async queue issue (switched from threading.Queue to asyncio.Queue)
+- Added Rich live dashboard (`--rich` / `-m` flag) for real-time pipeline monitoring
+- Rich monitor shows download/extract phases with current file names and real-time metrics
+- Changed producer from ProcessPoolExecutor to ThreadPoolExecutor (avoids nested process deadlocks)
+
+### Known Issues (In Progress)
+- **al_gadsden_23.pdf** causes segfault during embedding (not extraction) — unclear why
+- Some PDFs pass preflight but still crash during actual extraction/embedding
+- Need to investigate: crash might be in a different code path than preflight tests
+- Rich Live display may stack multiple tables instead of updating in-place (terminal detection issue)
+
+### Next Steps
+1. Re-run `python -m pipeline preflight --thorough` to catch problem files
+2. Investigate why some crashes aren't being caught by subprocess isolation
+3. Consider if preflight needs to test embedding path too, not just extraction
+4. Reconcile document counts: 903 done + ~745 pending + ~100 failed vs 1755 in S3
+
+### Debugging Tips
+- Single file with progress: `python -m pipeline run -f "filename.pdf"`
+- Use Rich dashboard for monitoring: `python -m pipeline run -m`
+- If ChromaDB segfaults: `rm -rf chroma_data/` and restart
+- Check status: `python -m pipeline status`
+- Check failures: `python -m pipeline failures -v`
