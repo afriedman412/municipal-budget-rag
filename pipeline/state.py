@@ -105,7 +105,7 @@ class StateDB:
             conn.commit()
         return added
 
-    def get_pending(self, stage: JobStatus, limit: int = 100) -> list[Job]:
+    def get_pending(self, stage: JobStatus, limit: int | None = None) -> list[Job]:
         """Get jobs ready for a given stage."""
         # Map stage to the status we're looking for
         status_for_stage = {
@@ -115,15 +115,25 @@ class StateDB:
         target_status = status_for_stage.get(stage, stage)
 
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM jobs
-                WHERE status = ?
-                ORDER BY created_at
-                LIMIT ?
-                """,
-                (target_status.value, limit)
-            ).fetchall()
+            if limit is None:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = ?
+                    ORDER BY created_at
+                    """,
+                    (target_status.value,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM jobs
+                    WHERE status = ?
+                    ORDER BY created_at
+                    LIMIT ?
+                    """,
+                    (target_status.value, limit)
+                ).fetchall()
         return [self._row_to_job(r) for r in rows]
 
     def get_failed(self, limit: int = 100) -> list[Job]:
