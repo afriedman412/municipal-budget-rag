@@ -17,6 +17,12 @@ python -m pipeline run --preflight        # Run preflight checks first
 python -m pipeline run --reset            # Reset stuck jobs before running
 python -m pipeline run --rich             # Use Rich live dashboard instead of tqdm
 python -m pipeline run -m                 # Same as --rich (shortcut)
+python -m pipeline run --web              # Write metrics for web monitor (see below)
+
+# Web-based monitoring (recommended for EC2/remote)
+python -m pipeline monitor                # Start web dashboard on port 8000
+python -m pipeline run --web              # Run pipeline with metrics output
+# Then open http://localhost:8000 or http://<ec2-ip>:8000
 
 # Pipeline management
 python -m pipeline status                 # Show job counts by status
@@ -31,6 +37,7 @@ python -m pipeline retry                  # Retry failed jobs
 # Environment setup
 make venv                                 # Create virtual environment
 make install                              # Install dependencies
+pip install fastapi uvicorn               # Required for web monitor
 ```
 
 ## Architecture

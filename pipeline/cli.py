@@ -145,6 +145,8 @@ def run(
         600, "--timeout", "-t", help="Extraction timeout in seconds (for single file mode)"),
     use_rich: bool = typer.Option(
         False, "--rich", "-m", help="Use Rich live dashboard instead of tqdm progress bar"),
+    use_web: bool = typer.Option(
+        False, "--web", "-w", help="Write metrics to JSON for web monitor (run 'pipeline monitor' separately)"),
 ):
     """Run the full pipeline: discover → extract → embed → index."""
     config = get_config()
@@ -208,9 +210,9 @@ def run(
 
     pipeline = Pipeline(config)
     if simple:
-        asyncio.run(pipeline.run_simple(batch_size=batch_size, use_rich=use_rich))
+        asyncio.run(pipeline.run_simple(batch_size=batch_size, use_rich=use_rich, use_web=use_web))
     else:
-        asyncio.run(pipeline.run(batch_size=batch_size, use_rich=use_rich))
+        asyncio.run(pipeline.run(batch_size=batch_size, use_rich=use_rich, use_web=use_web))
 
 
 @app.command()
@@ -540,6 +542,33 @@ def reset_stuck():
 
     reset = state.reset_stuck()
     console.print(f"[green]Reset {reset} jobs to pending[/green]")
+
+
+@app.command()
+def monitor(
+    host: str = typer.Option("0.0.0.0", help="Host to bind to"),
+    port: int = typer.Option(8000, help="Port to bind to"),
+):
+    """Start the web-based pipeline monitor.
+
+    Run this in a separate terminal, then run 'pipeline run --web' in another.
+    Open http://localhost:8000 (or http://<ec2-ip>:8000) in your browser.
+    """
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("[red]uvicorn not installed. Run: pip install uvicorn[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Starting Pipeline Monitor[/bold]")
+    console.print(f"  URL: http://{host}:{port}")
+    console.print(f"  Metrics file: pipeline_metrics.json")
+    console.print(f"  State DB: pipeline_state.db")
+    console.print()
+    console.print("[dim]Run 'python -m pipeline run --web' in another terminal[/dim]")
+    console.print()
+
+    uvicorn.run("pipeline.web_monitor:app", host=host, port=port, log_level="warning")
 
 
 def main():

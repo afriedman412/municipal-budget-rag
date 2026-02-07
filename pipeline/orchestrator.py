@@ -18,6 +18,7 @@ from .config import PipelineConfig
 from .state import StateDB, JobStatus
 from .s3 import S3Client
 from .rich_monitor import RichMonitor
+from .metrics_writer import MetricsWriter
 from .extract import extract_pdf_safe, ExtractedDocument
 from .embed import EmbeddingClient, document_to_chunks
 from .chroma import ChromaClient
@@ -277,7 +278,7 @@ class Pipeline:
 
         return success, failed
 
-    async def run(self, batch_size: int = None, use_rich: bool = False):
+    async def run(self, batch_size: int = None, use_rich: bool = False, use_web: bool = False):
         """
         Run the full pipeline with real producer-consumer parallelism.
 
@@ -288,6 +289,7 @@ class Pipeline:
         Args:
             batch_size: Number of PDFs to download/extract per batch (defaults to pdf_workers)
             use_rich: Use Rich monitor instead of tqdm progress bar
+            use_web: Write metrics to JSON file for web monitor
         """
         logger.info("Starting pipeline run")
         logger.info(
@@ -344,6 +346,7 @@ class Pipeline:
 
         # Set up progress display (Rich monitor or tqdm)
         monitor = None
+        metrics_writer = None
         pbar = None
         # Shared state for producer → monitor communication
         producer_phase = {"phase": "starting", "current_file": "", "download_count": 0, "download_total": 0}
@@ -356,38 +359,48 @@ class Pipeline:
         else:
             pbar = tqdm(total=pending_count, desc="Processing")
 
+        if use_web:
+            metrics_writer = MetricsWriter("pipeline_metrics.json")
+            metrics_writer.start()
+            logger.info("Writing metrics to pipeline_metrics.json")
+
         def _producer_progress(phase, current_file="", **kwargs):
             """Callback for producer to update monitor with phase/file info."""
             producer_phase["phase"] = phase
             producer_phase["current_file"] = current_file
             producer_phase.update(kwargs)
+            snapshot = {
+                "phase": phase,
+                "current_file": current_file,
+                **kwargs
+            }
             if monitor:
-                monitor.update({
-                    "phase": phase,
-                    "current_file": current_file,
-                    **kwargs
-                })
+                monitor.update(snapshot)
+            if metrics_writer:
+                metrics_writer.update(snapshot)
 
         def _update_monitor(current_file=""):
+            snapshot = {
+                "extracted_docs": producer_phase.get("extracted_docs", 0) or extracted_docs,
+                "extracted_chunks": producer_phase.get("extracted_chunks", 0) or extracted_chunks,
+                "embedded_docs": success,
+                "embedded_chunks": embedded_chunks,
+                "batches_started": batches_started,
+                "batches_done": batches_done,
+                "queue_depth": out_queue.qsize(),
+                "producer_done": not producer.is_alive(),
+                "errors": failed,
+                "phase": producer_phase["phase"],
+                "current_file": current_file or producer_phase["current_file"],
+                "download_count": producer_phase.get("download_count", 0),
+                "download_total": producer_phase.get("download_total", 0),
+                "extract_done": producer_phase.get("extract_done", 0),
+                "extract_total": producer_phase.get("extract_total", 0),
+            }
             if monitor:
-                # Use producer's extraction counts (real-time) + consumer's embedding counts
-                monitor.update({
-                    "extracted_docs": producer_phase.get("extracted_docs", 0) or extracted_docs,
-                    "extracted_chunks": producer_phase.get("extracted_chunks", 0) or extracted_chunks,
-                    "embedded_docs": success,
-                    "embedded_chunks": embedded_chunks,
-                    "batches_started": batches_started,
-                    "batches_done": batches_done,
-                    "queue_depth": out_queue.qsize(),
-                    "producer_done": not producer.is_alive(),
-                    "errors": failed,
-                    "phase": producer_phase["phase"],
-                    "current_file": current_file or producer_phase["current_file"],
-                    "download_count": producer_phase.get("download_count", 0),
-                    "download_total": producer_phase.get("download_total", 0),
-                    "extract_done": producer_phase.get("extract_done", 0),
-                    "extract_total": producer_phase.get("extract_total", 0),
-                })
+                monitor.update(snapshot)
+            if metrics_writer:
+                metrics_writer.update(snapshot)
 
         # Start producer in background thread (after callbacks are defined)
         producer = Thread(
@@ -466,21 +479,24 @@ class Pipeline:
         finally:
             if pbar:
                 pbar.close()
+            final_snapshot = {
+                "extracted_docs": extracted_docs,
+                "extracted_chunks": extracted_chunks,
+                "embedded_docs": success,
+                "embedded_chunks": embedded_chunks,
+                "batches_started": batches_started,
+                "batches_done": batches_done,
+                "queue_depth": 0,
+                "producer_done": True,
+                "errors": failed,
+                "phase": "done",
+            }
             if monitor:
-                # Final update before stopping
-                monitor.update({
-                    "extracted_docs": extracted_docs,
-                    "extracted_chunks": extracted_chunks,
-                    "embedded_docs": success,
-                    "embedded_chunks": embedded_chunks,
-                    "batches_started": batches_started,
-                    "batches_done": batches_done,
-                    "queue_depth": 0,
-                    "producer_done": True,
-                    "errors": failed,
-                    "phase": "done",
-                })
+                monitor.update(final_snapshot)
                 monitor.stop()
+            if metrics_writer:
+                metrics_writer.update(final_snapshot)
+                metrics_writer.stop()
 
         producer.join(timeout=5.0)
 
@@ -499,7 +515,7 @@ class Pipeline:
 
         return stats
 
-    async def run_simple(self, batch_size: int = 100, use_rich: bool = False):
+    async def run_simple(self, batch_size: int = 100, use_rich: bool = False, use_web: bool = False):
         """
         Simpler sequential run (useful for debugging).
         Processes one document at a time: extract → embed → index.
@@ -507,6 +523,7 @@ class Pipeline:
         Args:
             batch_size: Number of PDFs to fetch per batch
             use_rich: Use Rich monitor instead of tqdm progress bar
+            use_web: Write metrics to JSON file for web monitor
         """
         logger.info("Starting simple sequential run")
 
@@ -526,27 +543,37 @@ class Pipeline:
 
         # Set up progress display
         monitor = None
+        metrics_writer = None
+
         if use_rich:
             monitor = RichMonitor(refresh_hz=4)
             monitor.start()
             # Suppress info logging when Rich monitor is active (it interferes with display)
             logging.getLogger(__name__).setLevel(logging.WARNING)
 
+        if use_web:
+            metrics_writer = MetricsWriter("pipeline_metrics.json")
+            metrics_writer.start()
+            logger.info("Writing metrics to pipeline_metrics.json")
+
         def _update_monitor(phase="processing", current_file=""):
+            snapshot = {
+                "extracted_docs": success + failed,
+                "extracted_chunks": extracted_chunks,
+                "embedded_docs": success,
+                "embedded_chunks": embedded_chunks,
+                "batches_started": 1,
+                "batches_done": 1 if (success + failed) > 0 else 0,
+                "queue_depth": 0,
+                "producer_done": False,
+                "errors": failed,
+                "phase": phase,
+                "current_file": current_file,
+            }
             if monitor:
-                monitor.update({
-                    "extracted_docs": success + failed,
-                    "extracted_chunks": extracted_chunks,
-                    "embedded_docs": success,
-                    "embedded_chunks": embedded_chunks,
-                    "batches_started": 1,
-                    "batches_done": 1 if (success + failed) > 0 else 0,
-                    "queue_depth": 0,
-                    "producer_done": False,
-                    "errors": failed,
-                    "phase": phase,
-                    "current_file": current_file,
-                })
+                monitor.update(snapshot)
+            if metrics_writer:
+                metrics_writer.update(snapshot)
 
         try:
             while True:
@@ -625,20 +652,24 @@ class Pipeline:
                         _update_monitor(phase="error", current_file=filename)
 
         finally:
+            final_snapshot = {
+                "extracted_docs": success + failed,
+                "extracted_chunks": extracted_chunks,
+                "embedded_docs": success,
+                "embedded_chunks": embedded_chunks,
+                "batches_started": 1,
+                "batches_done": 1,
+                "queue_depth": 0,
+                "producer_done": True,
+                "errors": failed,
+                "phase": "done",
+            }
             if monitor:
-                monitor.update({
-                    "extracted_docs": success + failed,
-                    "extracted_chunks": extracted_chunks,
-                    "embedded_docs": success,
-                    "embedded_chunks": embedded_chunks,
-                    "batches_started": 1,
-                    "batches_done": 1,
-                    "queue_depth": 0,
-                    "producer_done": True,
-                    "errors": failed,
-                    "phase": "done",
-                })
+                monitor.update(final_snapshot)
                 monitor.stop()
+            if metrics_writer:
+                metrics_writer.update(final_snapshot)
+                metrics_writer.stop()
 
         logger.info(f"Complete: {success} succeeded, {failed} failed")
         return self.state.get_stats()

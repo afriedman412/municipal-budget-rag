@@ -1,0 +1,22 @@
+{
+  "started_at": 1770245096.1993861,
+  "last_update_at": 1770326368.6395688,
+  "extracted_docs": 231,
+  "extracted_chunks": 159,
+  "embedded_docs": 16,
+  "embedded_chunks": 159,
+  "batches_started": 1,
+  "batches_done": 1,
+  "queue_depth": 0,
+  "errors": 215,
+  "producer_done": false,
+  "phase": "extracting",
+  "current_file": "ca_santa_cruz_21.pdf",
+  "current_files": [
+    "ca_santa_cruz_21.pdf"
+  ],
+  "download_count": 0,
+  "download_total": 0,
+  "extract_done": 0,
+  "extract_total": 0
+}
