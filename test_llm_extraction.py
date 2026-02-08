@@ -38,6 +38,8 @@ def main():
                         help="Number of gold records to test")
     parser.add_argument("--n-chunks", type=int, default=20,
                         help="Max chunks to use per query")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Print chunks sent to LLM")
     args = parser.parse_args()
 
     llm = OpenAI(base_url=args.llm_url, api_key="not-needed")
@@ -74,6 +76,17 @@ def main():
         prompt = EXTRACTION_PROMPT.format(
             expense=expense, city=city, state=state, chunks=chunk_text
         )
+
+        if args.verbose:
+            print(f"\n  --- CHUNKS SENT TO LLM ---")
+            for i, c in enumerate(chunks):
+                print(f"  [Chunk {i+1} | {c['metadata'].get('filename','')}]")
+                # Print first 300 chars of each chunk
+                preview = c['text'][:300].replace('\n', '\n  ')
+                print(f"  {preview}")
+                if len(c['text']) > 300:
+                    print(f"  ... ({len(c['text'])} chars total)")
+                print()
 
         print(f"  Querying LLM...")
         response = llm.chat.completions.create(
