@@ -19,8 +19,8 @@ from openai import OpenAI
 EXTRACTION_PROMPT = """You are a municipal budget analyst. Extract the total {expense} EXPENDITURE amount for {city}, {state} for fiscal year {year}.
 
 Rules:
-- Return EXPENDITURES, not revenue or appropriations
-- Return the BUDGETED amount, not actual/unaudited figures
+- Return EXPENDITURES, not revenue
+- Return the BUDGETED amount or the APPROPRIATED amount, not actual values
 - Prefer ADOPTED budget over proposed or mayor's recommended
 - Return ONLY the numeric dollar amount (e.g. "$1,234,567")
 - If you cannot find the value, return "NOT FOUND"
@@ -74,7 +74,7 @@ def main():
         print(f"  Using {len(chunks)} chunks")
 
         chunk_text = "\n\n".join(
-            f"[Chunk {i+1} | {c['metadata'].get('filename','')} | parser: {c['metadata'].get('parser','')}]\n{c['text']}"
+            f"[Chunk {i+1} | {c['metadata'].get('filename', '')} | parser: {c['metadata'].get('parser', '')}]\n{c['text']}"
             for i, c in enumerate(chunks)
         )
 
@@ -85,7 +85,7 @@ def main():
         if args.verbose:
             print(f"\n  --- CHUNKS SENT TO LLM ---")
             for i, c in enumerate(chunks):
-                print(f"  [Chunk {i+1} | {c['metadata'].get('filename','')}]")
+                print(f"  [Chunk {i+1} | {c['metadata'].get('filename', '')}]")
                 # Print first 300 chars of each chunk
                 preview = c['text'][:300].replace('\n', '\n  ')
                 print(f"  {preview}")
