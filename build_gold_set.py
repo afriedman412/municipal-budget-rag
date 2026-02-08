@@ -102,6 +102,7 @@ async def main():
             "city": city,
             "year": year,
             "expense": expense,
+            "budget_type": g.get("budget_type", ""),
             "budget": g["budget"],
             "chunks": [
                 {"text": doc, "metadata": meta}

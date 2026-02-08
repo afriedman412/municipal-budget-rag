@@ -16,16 +16,21 @@ import os
 from openai import OpenAI
 
 
-EXTRACTION_PROMPT = """You are a budget analyst. Given the following excerpts from a municipal budget document, extract the total {expense} expenditure/budget amount for {city}, {state}.
+EXTRACTION_PROMPT = """You are a municipal budget analyst. Extract the total {expense} EXPENDITURE amount for {city}, {state} for fiscal year {year}.
 
-Return ONLY the numeric dollar amount (e.g. "$1,234,567"). If you cannot find the value, return "NOT FOUND".
+Rules:
+- Return EXPENDITURES, not revenue or appropriations
+- Return the BUDGETED amount, not actual/unaudited figures
+- Prefer ADOPTED budget over proposed or mayor's recommended
+- Return ONLY the numeric dollar amount (e.g. "$1,234,567")
+- If you cannot find the value, return "NOT FOUND"
 
 Budget document excerpts:
 ---
 {chunks}
 ---
 
-Total {expense} expenditure amount:"""
+Total {expense} budgeted expenditure for FY {year}:"""
 
 
 def main():
@@ -74,7 +79,7 @@ def main():
         )
 
         prompt = EXTRACTION_PROMPT.format(
-            expense=expense, city=city, state=state, chunks=chunk_text
+            expense=expense, city=city, state=state, year=year, chunks=chunk_text
         )
 
         if args.verbose:
