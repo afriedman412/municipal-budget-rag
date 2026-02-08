@@ -1,47 +1,58 @@
-"""Pipeline configuration."""
+"""Pipeline configuration from environment variables."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 import os
 
 
 @dataclass
-class PipelineConfig:
-    # S3 settings
-    s3_bucket: str = ""
-    s3_prefix: str = ""  # e.g., "budgets/pdfs/"
+class Config:
+    # S3
+    s3_bucket: str
+    s3_prefix: str
 
-    # Processing settings
-    pdf_workers: int = 8              # parallel PDF extraction processes
-    embed_batch_size: int = 50        # texts per embedding API call
-    embed_concurrency: int = 10       # concurrent embedding requests
-    max_retries: int = 3              # retries per failed job
+    # API Keys
+    aryn_api_key: str
+    openai_api_key: str
 
-    # Embedding settings
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 1536
+    # ChromaDB
+    chroma_host: str
+    chroma_api_key: str
+    chroma_collection: str
 
-    # ChromaDB settings (cloud)
-    chroma_host: str = ""             # e.g., "api.trychroma.com"
-    chroma_api_key: str = ""
-    chroma_collection: str = "municipal-budgets"
+    # Processing
+    batch_size: int
+    aryn_async: bool  # Use async API for parallel parsing (PAYG only)
+    embed_model: str
+    embed_dimensions: int
 
-    # State tracking
-    state_db_path: Path = field(default_factory=lambda: Path("pipeline_state.db"))
-
-    # Local temp storage for PDFs
-    temp_dir: Path = field(default_factory=lambda: Path("/tmp/pdf_pipeline"))
+    # Local
+    temp_dir: Path
+    state_db: Path
 
     @classmethod
-    def from_env(cls) -> "PipelineConfig":
-        """Load config from environment variables."""
+    def from_env(cls) -> "Config":
         return cls(
-            s3_bucket=os.getenv("S3_BUCKET", ""),
+            # S3
+            s3_bucket=os.environ["S3_BUCKET"],
             s3_prefix=os.getenv("S3_PREFIX", ""),
+
+            # API Keys
+            aryn_api_key=os.environ["ARYN_API_KEY"],
+            openai_api_key=os.environ["OPENAI_API_KEY"],
+
+            # ChromaDB
             chroma_host=os.getenv("CHROMA_HOST", ""),
             chroma_api_key=os.getenv("CHROMA_API_KEY", ""),
             chroma_collection=os.getenv("CHROMA_COLLECTION", "municipal-budgets"),
-            pdf_workers=int(os.getenv("PDF_WORKERS", "8")),
-            embed_batch_size=int(os.getenv("EMBED_BATCH_SIZE", "50")),
-            embed_concurrency=int(os.getenv("EMBED_CONCURRENCY", "10")),
+
+            # Processing
+            batch_size=int(os.getenv("BATCH_SIZE", "10")),
+            aryn_async=os.getenv("ARYN_ASYNC", "").lower() in ("1", "true", "yes"),
+            embed_model=os.getenv("EMBED_MODEL", "text-embedding-3-small"),
+            embed_dimensions=int(os.getenv("EMBED_DIMENSIONS", "1536")),
+
+            # Local
+            temp_dir=Path(os.getenv("TEMP_DIR", "/tmp/budget_pipeline")),
+            state_db=Path(os.getenv("STATE_DB", "pipeline_state.db")),
         )

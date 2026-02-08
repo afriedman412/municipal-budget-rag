@@ -11,6 +11,7 @@ env/
 pdfs_2026/
 notebooks/
 .claude/
+pipeline_metrics.json
 
 # Pipeline state and data
 *.db

@@ -10,66 +10,52 @@ PDF ingestion pipeline for municipal budget documents. Downloads PDFs from S3, e
 
 ```bash
 # Run the pipeline
-python -m pipeline run                    # Full pipeline (parallel producer-consumer)
-python -m pipeline run --simple           # Sequential mode (for debugging)
-python -m pipeline run -f "filename.pdf"  # Run a single file
-python -m pipeline run --preflight        # Run preflight checks first
-python -m pipeline run --reset            # Reset stuck jobs before running
-python -m pipeline run --rich             # Use Rich live dashboard instead of tqdm
-python -m pipeline run -m                 # Same as --rich (shortcut)
-python -m pipeline run --web              # Write metrics for web monitor (see below)
-
-# Web-based monitoring (recommended for EC2/remote)
-python -m pipeline monitor                # Start web dashboard on port 8000
-python -m pipeline run --web              # Run pipeline with metrics output
-# Then open http://localhost:8000 or http://<ec2-ip>:8000
+python -m pipeline run                    # Run pipeline on pending jobs
+python -m pipeline run --limit 5          # Process only N documents
+python -m pipeline run -v                 # Verbose logging
 
 # Pipeline management
 python -m pipeline status                 # Show job counts by status
+python -m pipeline discover               # Discover PDFs in S3 without processing
 python -m pipeline failures               # Show failed jobs and error summary
 python -m pipeline failures -v            # Show full error messages
-python -m pipeline preflight              # Quick preflight (first 5 pages)
-python -m pipeline preflight --thorough   # Thorough preflight (all pages, catches more)
-python -m pipeline skip <filename>        # Mark a PDF as failed/skipped
-python -m pipeline reset-stuck            # Reset jobs stuck in intermediate states
-python -m pipeline retry                  # Retry failed jobs
+python -m pipeline retry                  # Reset failed jobs to pending
+python -m pipeline reset                  # Reset stuck processing jobs to pending
+python -m pipeline stats                  # Show ChromaDB statistics
 
 # Environment setup
 make venv                                 # Create virtual environment
 make install                              # Install dependencies
-pip install fastapi uvicorn               # Required for web monitor
 ```
 
 ## Architecture
 
 ### Pipeline Flow
 ```
-S3 (PDFs) → Download → Extract (PyMuPDF) → Embed (OpenAI) → ChromaDB
+S3 (PDFs) → Download → Parse (Aryn DocParse) → Embed (OpenAI) → ChromaDB
 ```
 
 ### Key Components (`pipeline/`)
 
 - **cli.py**: Typer-based CLI with commands for running pipeline, checking status, managing failures
-- **orchestrator.py**: Main `Pipeline` class with producer-consumer architecture
-  - Producer thread: downloads batches + extracts in parallel (ThreadPoolExecutor)
-  - Uses ThreadPoolExecutor (not ProcessPoolExecutor) because `extract_pdf_safe` spawns subprocesses
-  - Uses `as_completed()` for real-time progress as extractions finish
-  - Batch size defaults to worker count (PDF_WORKERS env var)
-  - Consumer: embeds + indexes async (I/O-bound, batched)
-  - asyncio.Queue connects them (use `loop.call_soon_threadsafe()` for producer → consumer)
-- **rich_monitor.py**: Optional Rich-based live dashboard for monitoring pipeline progress
-  - Shows: phase (downloading/extracting), current files, extracted/embedded counts, rates, batch progress, queue depth, errors
-  - Extraction progress: shows files being processed (multiline) and counts (e.g., "extracting (3/8)")
-  - Thread-safe callback-based updates, auto-disables if not TTY
-- **preflight.py**: Pre-flight checks to identify problematic PDFs before extraction
-  - Runs checks in subprocess so segfaults don't kill main process
-  - Catches: corrupted files, encryption, RichMedia annotations, huge documents
-- **extract.py**: PDF text extraction using PyMuPDF (fitz), filename metadata parsing
-- **embed.py**: OpenAI embedding generation with batching, rate limiting, retries
+- **pipeline.py**: Main `Pipeline` class with async batch processing
+  - Discovers PDFs in S3, registers as jobs
+  - Processes in batches: download → parse → embed → index
+  - All async using asyncio
+- **aryn.py**: Aryn DocParse client for PDF parsing
+  - Wraps sync SDK with `asyncio.to_thread()`
+  - Extracts text, tables, and structure from PDFs
+  - Parses filename metadata (state, city, year)
+- **embed.py**: OpenAI embedding generation with batching
+  - Chunks documents with overlap
+  - Batches API calls (100 chunks per request)
 - **chroma.py**: ChromaDB client (supports cloud, self-hosted, or local)
-- **state.py**: SQLite-based job state tracking (pending → extracting → embedding → done/failed)
-- **config.py**: Environment-based configuration (`PipelineConfig.from_env()`)
-- **s3.py**: S3 operations (list, download, batch download)
+- **state.py**: SQLite-based job state tracking (pending → processing → done/failed)
+- **config.py**: Environment-based configuration (`Config.from_env()`)
+- **s3.py**: Async S3 operations (list, download, batch download)
+
+### Old Architecture (in `pipeline_old/`)
+The previous PyMuPDF-based extraction code is preserved in `pipeline_old/` for reference.
 
 ### Filename Convention
 PDFs follow: `SS_city_name_YY[_budget_type].pdf`
@@ -81,11 +67,13 @@ PDFs follow: `SS_city_name_YY[_budget_type].pdf`
 ### Environment Variables
 ```
 S3_BUCKET         # Required: S3 bucket name
-S3_PREFIX         # S3 prefix for PDFs
+S3_PREFIX         # S3 prefix for PDFs (e.g., "de" for Delaware files)
+ARYN_API_KEY      # Required: Aryn DocParse API key
+OPENAI_API_KEY    # Required: For embeddings
 CHROMA_HOST       # ChromaDB host (empty for local)
 CHROMA_API_KEY    # ChromaDB API key (for cloud)
-OPENAI_API_KEY    # For embeddings
-PDF_WORKERS       # Parallel PDF extraction processes (default: 8)
+CHROMA_COLLECTION # Collection name (default: municipal-budgets)
+BATCH_SIZE        # Documents per batch (default: 10)
 ```
 
 ### EC2 Instance
@@ -100,35 +88,66 @@ aws ec2 describe-instances --query 'Reservations[0].Instances[0].PublicIpAddress
 ssh -i ~/.ssh/<your-key>.pem ubuntu@<ip>
 ```
 
-## Current Work
+## Current State
 
-Working on making the pipeline more robust and generalizable:
-- Built preflight functionality to scan PDFs for errors before full ingestion
-- Added crash-resistant preflight and extraction (runs in subprocess to survive segfaults)
-- Thorough preflight mode (`--thorough`) tests all pages and records which pages fail
-- Page-level skipping: if specific pages crash, skip just those pages, not the whole file
-- Single file mode (`run -f`) for testing/debugging individual files with page-level tqdm
-- Fixed ChromaDB batch size limit (was failing on docs with >5461 chunks)
-- Fixed async queue issue (switched from threading.Queue to asyncio.Queue)
-- Added Rich live dashboard (`--rich` / `-m` flag) for real-time pipeline monitoring
-- Rich monitor shows download/extract phases with current file names and real-time metrics
-- Changed producer from ProcessPoolExecutor to ThreadPoolExecutor (avoids nested process deadlocks)
+### Data
+- **~103 PDFs ingested** across ~50 states, both parsers
+- **170,577 chunks** in ChromaDB (local persistent, `chroma_data/`)
+- **Dual parser**: Aryn DocParse (cloud) + PyMuPDF (local), both stored with `parser` metadata field
+- **Ground truth DB**: SQLite `pipeline_state.db` → `validation` table with 6,126 records across 485 cities
+  - Schema: `(state TEXT, city TEXT, year INTEGER, expense TEXT, budget_type TEXT, budget REAL, doc_page TEXT, pdf_page INTEGER)`
 
-### Known Issues (In Progress)
-- **al_gadsden_23.pdf** causes segfault during embedding (not extraction) — unclear why
-- Some PDFs pass preflight but still crash during actual extraction/embedding
-- Need to investigate: crash might be in a different code path than preflight tests
-- Rich Live display may stack multiple tables instead of updating in-place (terminal detection issue)
+### Validation (`validate_retrieval.py`)
+- Iterates ALL rows from `validation` table (no hardcoded city list)
+- Pre-caches 3 query embeddings (General Fund, Police, Education)
+- Tests both semantic-only and keyword-filtered retrieval
+- **Current results: 84% retrieval rate** (81/97 records where chunks contain the expected value)
+- Currently uses **string-matching** on raw chunks — NOT full RAG
+
+### What's Missing: LLM Extraction Step
+The validation currently checks if the expected number appears in retrieved chunks (string match).
+The intended full RAG loop is:
+1. Retrieve chunks from ChromaDB (have this)
+2. Send chunks to LLM → extract definitive budget number (MISSING)
+3. Compare LLM answer to ground truth (have the comparison logic)
+
+**Plan**: Use a local LLM (Ollama or vLLM) to avoid OpenAI costs:
+- Ollama: `brew install ollama && ollama pull llama3.1:8b` — uses Metal on Apple Silicon
+- vLLM: For GPU compute instance — `vllm serve meta-llama/Llama-3.1-8B-Instruct`
+- Both expose OpenAI-compatible API, so code uses same `openai` Python client with different `base_url`
+
+### Key Scripts
+- `process_local.py` — Process local PDFs: parse → embed → index. Supports `--parser {aryn,pymupdf}`
+- `validate_retrieval.py` — Run retrieval validation against ground truth
+
+### Aryn API Notes
+
+**Free Tier Limitations:**
+- 10,000 pages/month
+- 1,000 documents max storage
+- **Sequential processing only** - one request at a time (429 error if concurrent)
+- No async API access (`partition_file_async_submit` returns 403)
+
+**PAYG Tier ($2/1000 pages):**
+- Unlimited pages
+- Async API available for concurrent processing
+- Use `partition_file_async_submit` / `partition_file_async_result` for batch processing
+
+**SDK Functions:**
+- `partition_file(file, aryn_api_key=...)` - sync parsing
+- `partition_file_async_submit(file, ...)` - submit for async (PAYG only)
+- `partition_file_async_result(task_id, ...)` - poll for result
+- `selected_pages` param can process specific page ranges
+
+**Docs:** https://docs.aryn.ai/docparse/aryn_sdk
 
 ### Next Steps
-1. Re-run `python -m pipeline preflight --thorough` to catch problem files
-2. Investigate why some crashes aren't being caught by subprocess isolation
-3. Consider if preflight needs to test embedding path too, not just extraction
-4. Reconcile document counts: 903 done + ~745 pending + ~100 failed vs 1755 in S3
+1. Build LLM extraction step into validation (local Ollama or vLLM on GPU)
+2. Add `--llm-url` flag to `validate_retrieval.py` for flexible backend
+3. Investigate the 16% retrieval misses (mostly scanned/image-heavy PDFs that parsed poorly)
 
 ### Debugging Tips
-- Single file with progress: `python -m pipeline run -f "filename.pdf"`
-- Use Rich dashboard for monitoring: `python -m pipeline run -m`
-- If ChromaDB segfaults: `rm -rf chroma_data/` and restart
 - Check status: `python -m pipeline status`
 - Check failures: `python -m pipeline failures -v`
+- Reset stuck jobs: `python -m pipeline reset`
+- Retry failed: `python -m pipeline retry`

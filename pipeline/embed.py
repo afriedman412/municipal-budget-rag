@@ -1,143 +1,146 @@
-"""Embedding generation with batching and async support."""
+"""Async OpenAI embeddings."""
 
 import asyncio
-import logging
-from dataclasses import dataclass
 import hashlib
+import re
+from dataclasses import dataclass
 
-from openai import AsyncOpenAI, RateLimitError, APITimeoutError
+from openai import AsyncOpenAI
 
-from .config import PipelineConfig
-from .extract import ExtractedDocument, chunk_text
-
-logger = logging.getLogger(__name__)
+from .config import Config
+from .aryn import ParsedDocument
 
 
 @dataclass
-class DocumentChunk:
-    """A chunk of text ready for embedding."""
+class Chunk:
     chunk_id: str
     text: str
+    embedding: list[float] | None
+    # Metadata
     s3_key: str
     filename: str
-    page_num: int
-    chunk_idx: int
-    city: str
-    state: str
-    year: int
+    state: str | None
+    city: str | None
+    year: int | None
+    chunk_index: int
+    # Content tags (set at chunking time)
+    has_table: bool = False
+    has_summary: bool = False
+    parser: str = ""
 
 
-@dataclass
-class EmbeddedChunk:
-    """A chunk with its embedding."""
-    chunk: DocumentChunk
-    embedding: list[float]
+def _chunk_text(text: str, max_chars: int = 4000, overlap: int = 200) -> list[str]:
+    """Split text into overlapping chunks."""
+    if len(text) <= max_chars:
+        return [text] if text.strip() else []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + max_chars
+
+        # Try to break at paragraph or sentence
+        if end < len(text):
+            for sep in ["\n\n", "\n", ". ", " "]:
+                idx = text.rfind(sep, start + max_chars // 2, end)
+                if idx != -1:
+                    end = idx + len(sep)
+                    break
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        start = end - overlap
+
+    return chunks
 
 
-def create_chunk_id(filename: str, page: int, chunk_idx: int) -> str:
-    """Create a deterministic unique ID for a chunk."""
-    content = f"{filename}:p{page}:c{chunk_idx}"
-    return hashlib.md5(content.encode()).hexdigest()
+_SUMMARY_PATTERN = re.compile(
+    r"TOTAL\s+(EXPENDITURE|EXPENSE|REVENUE|BUDGET)"
+    r"|GENERAL\s+FUND"
+    r"|ALL\s+FUNDS\s+SUMMARY",
+    re.IGNORECASE,
+)
 
 
-def document_to_chunks(doc: ExtractedDocument) -> list[DocumentChunk]:
-    """Convert an extracted document to embeddable chunks."""
+def _tag_chunk(text: str) -> tuple[bool, bool]:
+    """Detect if chunk has tables or summary data."""
+    has_table = "| " in text and " | " in text
+    has_summary = bool(_SUMMARY_PATTERN.search(text))
+    return has_table, has_summary
+
+
+def document_to_chunks(doc: ParsedDocument, parser: str = "") -> list[Chunk]:
+    """Convert a parsed document to chunks for embedding."""
+    text_chunks = _chunk_text(doc.text)
     chunks = []
 
-    for page in doc.pages:
-        text_chunks = chunk_text(page.text)
+    for i, text in enumerate(text_chunks):
+        # Deterministic ID from content
+        content_hash = hashlib.md5(
+            f"{doc.s3_key}:{i}:{text[:100]}".encode()
+        ).hexdigest()[:12]
+        chunk_id = f"{doc.filename}_{i}_{content_hash}"
+        has_table, has_summary = _tag_chunk(text)
 
-        for chunk_idx, text in enumerate(text_chunks):
-            chunk_id = create_chunk_id(doc.filename, page.page_num, chunk_idx)
-            chunks.append(DocumentChunk(
-                chunk_id=chunk_id,
-                text=text,
-                s3_key=doc.s3_key,
-                filename=doc.filename,
-                page_num=page.page_num,
-                chunk_idx=chunk_idx,
-                city=doc.city,
-                state=doc.state,
-                year=doc.year,
-            ))
+        chunks.append(Chunk(
+            chunk_id=chunk_id,
+            text=text,
+            embedding=None,
+            s3_key=doc.s3_key,
+            filename=doc.filename,
+            state=doc.state,
+            city=doc.city,
+            year=doc.year,
+            chunk_index=i,
+            has_table=has_table,
+            has_summary=has_summary,
+            parser=parser,
+        ))
 
     return chunks
 
 
 class EmbeddingClient:
-    """Async client for generating embeddings with batching."""
-
-    def __init__(self, config: PipelineConfig):
+    def __init__(self, config: Config):
         self.config = config
-        self.client = AsyncOpenAI()
-        self.semaphore = asyncio.Semaphore(config.embed_concurrency)
+        self.client = AsyncOpenAI(api_key=config.openai_api_key)
+        self.model = config.embed_model
+        self.dimensions = config.embed_dimensions
 
-    async def embed_batch(
-        self,
-        texts: list[str],
-        max_retries: int = 5
-    ) -> list[list[float]]:
-        """Embed a batch of texts with rate limiting and retry."""
-        # Truncate texts to avoid token limit (~8191 tokens for text-embedding-3-small)
-        # Conservative: ~3 chars per token for budget docs with numbers
-        truncated = [t[:24000] for t in texts]
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch of texts."""
+        if not texts:
+            return []
 
-        async with self.semaphore:
-            for attempt in range(max_retries):
-                try:
-                    response = await self.client.embeddings.create(
-                        model=self.config.embedding_model,
-                        input=truncated
-                    )
-                    return [item.embedding for item in response.data]
+        response = await self.client.embeddings.create(
+            model=self.model,
+            input=texts,
+            dimensions=self.dimensions,
+        )
+        return [item.embedding for item in response.data]
 
-                except RateLimitError as e:
-                    wait_time = min(2 ** attempt * 1.0, 60.0)  # Exponential backoff, max 60s
-                    logger.warning(f"Rate limited, waiting {wait_time:.1f}s (attempt {attempt + 1})")
-                    await asyncio.sleep(wait_time)
+    async def embed_chunks(self, chunks: list[Chunk], batch_size: int = 100) -> list[Chunk]:
+        """Embed all chunks, batching API calls."""
+        if not chunks:
+            return []
 
-                except APITimeoutError as e:
-                    wait_time = 2 ** attempt * 0.5
-                    logger.warning(f"Timeout, retrying in {wait_time:.1f}s (attempt {attempt + 1})")
-                    await asyncio.sleep(wait_time)
-
-            # Final attempt - let it raise
-            response = await self.client.embeddings.create(
-                model=self.config.embedding_model,
-                input=truncated
-            )
-            return [item.embedding for item in response.data]
-
-    async def embed_chunks(
-        self,
-        chunks: list[DocumentChunk],
-        batch_size: int | None = None
-    ) -> list[EmbeddedChunk]:
-        """Embed all chunks with batching and concurrency control."""
-        batch_size = batch_size or self.config.embed_batch_size
-        results = []
-
-        # Create batches
-        batches = [
-            chunks[i:i + batch_size]
-            for i in range(0, len(chunks), batch_size)
-        ]
-
-        # Process batches concurrently (limited by semaphore)
-        async def process_batch(batch: list[DocumentChunk]) -> list[EmbeddedChunk]:
+        # Process in batches
+        all_embeddings = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
             texts = [c.text for c in batch]
-            embeddings = await self.embed_batch(texts)
-            return [
-                EmbeddedChunk(chunk=chunk, embedding=emb)
-                for chunk, emb in zip(batch, embeddings)
-            ]
+            embeddings = await self.embed_texts(texts)
+            all_embeddings.extend(embeddings)
 
-        tasks = [process_batch(batch) for batch in batches]
-        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Attach embeddings to chunks
+        for chunk, embedding in zip(chunks, all_embeddings):
+            chunk.embedding = embedding
 
-        for result in batch_results:
-            if isinstance(result, Exception):
-                raise result
-            results.extend(result)
+        return chunks
 
-        return results
+    async def embed_document(self, doc: ParsedDocument) -> list[Chunk]:
+        """Convert document to chunks and embed them."""
+        chunks = document_to_chunks(doc)
+        return await self.embed_chunks(chunks)

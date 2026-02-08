@@ -1,94 +1,62 @@
-"""S3 operations for PDF pipeline."""
+"""Async S3 operations."""
 
-import boto3
-from botocore.config import Config
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import asyncio
+import aioboto3
 from pathlib import Path
-from typing import Iterator
 
-from .config import PipelineConfig
+from .config import Config
 
 
 class S3Client:
-    """S3 client for listing and downloading PDFs."""
-
-    def __init__(self, config: PipelineConfig):
+    def __init__(self, config: Config):
         self.config = config
-        self.download_workers = 10  # Parallel download threads
+        self.session = aioboto3.Session()
+        config.temp_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set pool size larger than workers to avoid connection churn
-        boto_config = Config(max_pool_connections=self.download_workers + 5)
-        self.client = boto3.client("s3", config=boto_config)
-
-        self.bucket = config.s3_bucket
-        self.prefix = config.s3_prefix
-
-        # Ensure temp directory exists
-        self.config.temp_dir.mkdir(parents=True, exist_ok=True)
-
-    def list_pdfs(self) -> list[str]:
-        """List all PDF keys in the bucket/prefix."""
-        paginator = self.client.get_paginator("list_objects_v2")
+    async def list_pdfs(self) -> list[str]:
+        """List all PDF keys in bucket/prefix."""
         keys = []
-
-        for page in paginator.paginate(Bucket=self.bucket, Prefix=self.prefix):
-            for obj in page.get("Contents", []):
-                key = obj["Key"]
-                if key.lower().endswith(".pdf"):
-                    keys.append(key)
-
+        async with self.session.client("s3") as s3:
+            paginator = s3.get_paginator("list_objects_v2")
+            async for page in paginator.paginate(
+                Bucket=self.config.s3_bucket,
+                Prefix=self.config.s3_prefix
+            ):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    if key.lower().endswith(".pdf"):
+                        keys.append(key)
         return keys
 
-    def download_pdf(self, s3_key: str) -> Path:
-        """Download a PDF to local temp storage. Returns local path."""
-        # Create local path preserving some structure
+    async def download(self, s3_key: str) -> Path:
+        """Download a PDF to temp directory."""
         filename = Path(s3_key).name
         local_path = self.config.temp_dir / filename
 
-        # Download if not already cached
         if not local_path.exists():
-            self.client.download_file(self.bucket, s3_key, str(local_path))
-
+            async with self.session.client("s3") as s3:
+                await s3.download_file(
+                    self.config.s3_bucket,
+                    s3_key,
+                    str(local_path)
+                )
         return local_path
 
-    def download_pdf_bytes(self, s3_key: str) -> bytes:
-        """Download PDF directly to memory. Use for smaller files."""
-        response = self.client.get_object(Bucket=self.bucket, Key=s3_key)
-        return response["Body"].read()
+    async def download_batch(self, keys: list[str]) -> list[tuple[str, Path | None, str | None]]:
+        """Download multiple PDFs concurrently.
 
-    def iter_pdfs(self, keys: list[str]) -> Iterator[tuple[str, Path]]:
-        """Iterate over PDFs, downloading each. Yields (s3_key, local_path)."""
-        for key in keys:
-            local_path = self.download_pdf(key)
-            yield key, local_path
-
-    def download_batch(self, s3_keys: list[str]) -> list[tuple[str, Path | None, str | None]]:
-        """
-        Download multiple PDFs in parallel.
         Returns: [(s3_key, local_path or None, error or None), ...]
         """
-        results = []
-
-        def download_one(key: str) -> tuple[str, Path | None, str | None]:
+        async def download_one(key: str):
             try:
-                path = self.download_pdf(key)
+                path = await self.download(key)
                 return (key, path, None)
             except Exception as e:
                 return (key, None, str(e))
 
-        with ThreadPoolExecutor(max_workers=self.download_workers) as executor:
-            futures = {executor.submit(download_one, key): key for key in s3_keys}
-            for future in as_completed(futures):
-                results.append(future.result())
+        return await asyncio.gather(*[download_one(k) for k in keys])
 
-        return results
-
-    def cleanup_local(self, local_path: Path):
-        """Remove a local PDF after processing."""
-        if local_path.exists():
-            local_path.unlink()
-
-    def cleanup_all(self):
-        """Remove all cached PDFs."""
-        for pdf in self.config.temp_dir.glob("*.pdf"):
-            pdf.unlink()
+    def cleanup(self, path: Path):
+        """Remove a downloaded file."""
+        if path.exists():
+            path.unlink()
