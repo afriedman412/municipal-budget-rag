@@ -4,6 +4,7 @@ Also caches the 3 query embeddings so LLM testing needs zero OpenAI calls."""
 
 import asyncio
 import json
+import os
 import sqlite3
 
 from dotenv import load_dotenv
@@ -75,6 +76,47 @@ async def main():
         json.dump(query_embeddings, f)
 
     print(f"Saved 3 query embeddings to gold_query_embeddings.json")
+
+    # Cache retrieved chunks for each gold record
+    print(f"\nRetrieving chunks for {len(gold)} gold records...")
+    chunks_cache = []
+    for i, g in enumerate(gold):
+        state, city, year = g["state"], g["city"], g["year"]
+        expense = g["expense"]
+        chroma_city = city.lower().replace(" ", "_")
+        query_embedding = query_embeddings[expense]
+
+        results = chroma.query_budget(
+            query_embedding=query_embedding,
+            city=chroma_city,
+            year=year,
+            n_results=20,
+            state=state,
+        )
+
+        docs = results["documents"][0]
+        metas = results["metadatas"][0]
+
+        chunks_cache.append({
+            "state": state,
+            "city": city,
+            "year": year,
+            "expense": expense,
+            "budget": g["budget"],
+            "chunks": [
+                {"text": doc, "metadata": meta}
+                for doc, meta in zip(docs, metas)
+            ],
+        })
+
+        if (i + 1) % 20 == 0:
+            print(f"  {i + 1}/{len(gold)} records cached...")
+
+    with open("gold_chunks_cache.json", "w") as f:
+        json.dump(chunks_cache, f)
+
+    cache_size = os.path.getsize("gold_chunks_cache.json") / 1024 / 1024
+    print(f"Saved {len(chunks_cache)} records to gold_chunks_cache.json ({cache_size:.1f} MB)")
 
     # Preview
     cities = sorted(set((g["state"], g["city"], g["year"]) for g in gold))
