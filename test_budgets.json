@@ -3,5 +3,6 @@
     {"city": "el_paso", "state": "tx", "year": 2020},
     {"city": "corvallis", "state": "or", "year": 2018},
     {"city": "peekskill", "state": "ny", "year": 2023},
-    {"city": "carrollton", "state": "ga", "year": 2022}
+    {"city": "carrollton", "state": "ga", "year": 2022},
+    {"city": "paducah", "state": "ky", "year": 2022}
 ]

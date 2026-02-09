@@ -17,25 +17,33 @@ from pipeline.embed import EmbeddingClient
 
 async def main():
     config = Config.from_env()
-    chroma = ChromaClient(config)
     embedder = EmbeddingClient(config)
     conn = sqlite3.connect("pipeline_state.db")
     conn.row_factory = sqlite3.Row
 
-    # Get all distinct (state, city, year) from ChromaDB
-    print("Querying ChromaDB for ingested documents...")
-    sample = chroma.collection.get(
-        where={"city": {"$ne": ""}},
-        limit=200000,
-        include=["metadatas"],
-    )
+    # Get all distinct (state, city, year) from both parser collections
+    collections = {"aryn": "budgets-aryn", "pymupdf": "budgets-pymupdf"}
     ingested = set()
-    for m in sample["metadatas"]:
-        city = m.get("city", "")
-        state = m.get("state", "")
-        year = m.get("year", 0)
-        if city and state:
-            ingested.add((state, city, year))
+    print("Querying ChromaDB for ingested documents...")
+    for name, coll_name in collections.items():
+        cfg = Config.from_env()
+        cfg.chroma_collection = coll_name
+        try:
+            c = ChromaClient(cfg)
+            sample = c.collection.get(
+                where={"city": {"$ne": ""}},
+                limit=200000,
+                include=["metadatas"],
+            )
+            for m in sample["metadatas"]:
+                city = m.get("city", "")
+                state = m.get("state", "")
+                year = m.get("year", 0)
+                if city and state:
+                    ingested.add((state, city, year))
+            print(f"  {name}: {len(sample['metadatas'])} chunks")
+        except Exception as e:
+            print(f"  {name}: skipped ({e})")
 
     print(f"Found {len(ingested)} distinct (state, city, year) combos in ChromaDB")
 
@@ -77,47 +85,64 @@ async def main():
 
     print(f"Saved 3 query embeddings to gold_query_embeddings.json")
 
-    # Cache retrieved chunks for each gold record
-    print(f"\nRetrieving chunks for {len(gold)} gold records...")
-    chunks_cache = []
-    for i, g in enumerate(gold):
-        state, city, year = g["state"], g["city"], g["year"]
-        expense = g["expense"]
-        chroma_city = city.lower().replace(" ", "_")
-        query_embedding = query_embeddings[expense]
+    # Cache retrieved chunks for each gold record, per parser collection
+    collections = {
+        "aryn": "budgets-aryn",
+        "pymupdf": "budgets-pymupdf",
+    }
 
-        results = chroma.query_budget(
-            query_embedding=query_embedding,
-            city=chroma_city,
-            year=year,
-            n_results=20,
-            state=state,
-        )
+    for parser_name, collection_name in collections.items():
+        print(f"\nRetrieving chunks from {collection_name}...")
+        config_copy = Config.from_env()
+        config_copy.chroma_collection = collection_name
+        try:
+            parser_chroma = ChromaClient(config_copy)
+        except Exception as e:
+            print(f"  Skipping {collection_name}: {e}")
+            continue
 
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
+        chunks_cache = []
+        for i, g in enumerate(gold):
+            state, city, year = g["state"], g["city"], g["year"]
+            expense = g["expense"]
+            chroma_city = city.lower().replace(" ", "_")
+            query_embedding = query_embeddings[expense]
 
-        chunks_cache.append({
-            "state": state,
-            "city": city,
-            "year": year,
-            "expense": expense,
-            "budget_type": g.get("budget_type", ""),
-            "budget": g["budget"],
-            "chunks": [
-                {"text": doc, "metadata": meta}
-                for doc, meta in zip(docs, metas)
-            ],
-        })
+            try:
+                results = parser_chroma.query_budget(
+                    query_embedding=query_embedding,
+                    city=chroma_city,
+                    year=year,
+                    n_results=20,
+                    state=state,
+                )
+                docs = results["documents"][0]
+                metas = results["metadatas"][0]
+            except Exception:
+                docs, metas = [], []
 
-        if (i + 1) % 20 == 0:
-            print(f"  {i + 1}/{len(gold)} records cached...")
+            chunks_cache.append({
+                "state": state,
+                "city": city,
+                "year": year,
+                "expense": expense,
+                "budget_type": g.get("budget_type", ""),
+                "budget": g["budget"],
+                "chunks": [
+                    {"text": doc, "metadata": meta}
+                    for doc, meta in zip(docs, metas)
+                ],
+            })
 
-    with open("gold_chunks_cache.json", "w") as f:
-        json.dump(chunks_cache, f)
+            if (i + 1) % 20 == 0:
+                print(f"  {i + 1}/{len(gold)} records cached...")
 
-    cache_size = os.path.getsize("gold_chunks_cache.json") / 1024 / 1024
-    print(f"Saved {len(chunks_cache)} records to gold_chunks_cache.json ({cache_size:.1f} MB)")
+        outfile = f"gold_chunks_{parser_name}.json"
+        with open(outfile, "w") as f:
+            json.dump(chunks_cache, f)
+
+        cache_size = os.path.getsize(outfile) / 1024 / 1024
+        print(f"Saved {len(chunks_cache)} records to {outfile} ({cache_size:.1f} MB)")
 
     # Preview
     cities = sorted(set((g["state"], g["city"], g["year"]) for g in gold))

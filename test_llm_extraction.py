@@ -43,8 +43,8 @@ def main():
                         help="Number of gold records to test (default: use test_budgets.json)")
     parser.add_argument("--n-chunks", type=int, default=20,
                         help="Max chunks to use per query")
-    parser.add_argument("--parser", choices=["aryn", "pymupdf"],
-                        help="Filter chunks to one parser (default: both)")
+    parser.add_argument("--cache", default="gold_chunks_cache.json",
+                        help="Chunks cache file (default: gold_chunks_cache.json)")
     parser.add_argument("--city", nargs=3, action="append", metavar=("CITY", "STATE", "YEAR"),
                         help="Filter to specific city/state/year (repeatable)")
     parser.add_argument("--verbose", "-v", action="store_true",
@@ -53,7 +53,7 @@ def main():
 
     llm = OpenAI(base_url=args.llm_url, api_key="not-needed")
 
-    with open("gold_chunks_cache.json") as f:
+    with open(args.cache) as f:
         cache = json.load(f)
 
     if args.city:
@@ -83,10 +83,7 @@ def main():
         print(f"  Expected: ${expected:,.0f}")
         print(f"{'='*70}")
 
-        chunks = row["chunks"]
-        if args.parser:
-            chunks = [c for c in chunks if c["metadata"].get("parser", "pymupdf") == args.parser]
-        chunks = chunks[:args.n_chunks]
+        chunks = row["chunks"][:args.n_chunks]
 
         if not chunks:
             print("  No cached chunks for this record.")
