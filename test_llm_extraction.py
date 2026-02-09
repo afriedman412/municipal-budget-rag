@@ -39,12 +39,14 @@ def main():
                         help="LLM API base URL (default: Ollama)")
     parser.add_argument("--model", default="llama3.1:8b",
                         help="Model name (default: llama3.1:8b for Ollama)")
-    parser.add_argument("--limit", type=int, default=5,
-                        help="Number of gold records to test")
+    parser.add_argument("--limit", type=int,
+                        help="Number of gold records to test (default: use test_budgets.json)")
     parser.add_argument("--n-chunks", type=int, default=20,
                         help="Max chunks to use per query")
     parser.add_argument("--parser", choices=["aryn", "pymupdf"],
                         help="Filter chunks to one parser (default: both)")
+    parser.add_argument("--city", nargs=3, action="append", metavar=("CITY", "STATE", "YEAR"),
+                        help="Filter to specific city/state/year (repeatable)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Print chunks sent to LLM")
     args = parser.parse_args()
@@ -54,7 +56,21 @@ def main():
     with open("gold_chunks_cache.json") as f:
         cache = json.load(f)
 
-    rows = cache[:args.limit]
+    if args.city:
+        city_filters = {(c.lower().replace(" ", "_"), s.lower(), int(y)) for c, s, y in args.city}
+    elif args.limit:
+        rows = cache[:args.limit]
+        city_filters = None
+    else:
+        # Default: load test set from test_budgets.json
+        with open("test_budgets.json") as f:
+            test_set = json.load(f)
+        city_filters = {(t["city"].lower(), t["state"].lower(), t["year"]) for t in test_set}
+
+    if city_filters:
+        rows = [r for r in cache if (r["city"].lower().replace(" ", "_"), r["state"].lower(), r["year"]) in city_filters]
+    elif not args.limit:
+        rows = cache
     print(f"Testing {len(rows)}/{len(cache)} gold records")
     print(f"LLM: {args.llm_url} model={args.model} chunks={args.n_chunks}\n")
 
