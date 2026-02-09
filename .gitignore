@@ -12,6 +12,7 @@ pdfs_2026/
 notebooks/
 .claude/
 pipeline_metrics.json
+start_vm.sh
 
 # Pipeline state and data
 *.db

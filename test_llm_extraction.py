@@ -69,7 +69,7 @@ def main():
 
         chunks = row["chunks"]
         if args.parser:
-            chunks = [c for c in chunks if c["metadata"].get("parser") == args.parser]
+            chunks = [c for c in chunks if c["metadata"].get("parser", "pymupdf") == args.parser]
         chunks = chunks[:args.n_chunks]
 
         if not chunks:
