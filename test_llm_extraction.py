@@ -43,6 +43,8 @@ def main():
                         help="Number of gold records to test")
     parser.add_argument("--n-chunks", type=int, default=20,
                         help="Max chunks to use per query")
+    parser.add_argument("--parser", choices=["aryn", "pymupdf"],
+                        help="Filter chunks to one parser (default: both)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Print chunks sent to LLM")
     args = parser.parse_args()
@@ -65,7 +67,10 @@ def main():
         print(f"  Expected: ${expected:,.0f}")
         print(f"{'='*70}")
 
-        chunks = row["chunks"][:args.n_chunks]
+        chunks = row["chunks"]
+        if args.parser:
+            chunks = [c for c in chunks if c["metadata"].get("parser") == args.parser]
+        chunks = chunks[:args.n_chunks]
 
         if not chunks:
             print("  No cached chunks for this record.")
