@@ -208,18 +208,29 @@ Code transfer to VM via GitHub + deploy keys.
 ### Fine-tuning Status
 - LoRA fine-tuning completed (3 epochs, ~2 hours on L4 GPU)
 - Merged model saved on VM at `budget-mistral-lora-merged/` (~14GB)
-- LoRA adapter saved at `budget-mistral-lora/` (~100MB)
-- VM is stopped; model persists on disk
-- Used `venv-finetune` for training (separate from `venv` for serving due to torch version conflict)
+- Fine-tuned model tested: 4/12 exact match on test set (same as baseline)
+- Conclusion: parsing/retrieval is the bottleneck, not LLM extraction
+- VM venvs rebuilt: `venv-vllm` (vLLM only), `venv-finetune` (unsloth + openai + everything else)
 - Fixed bf16/fp16 mismatch: L4 loads in bfloat16, so `bf16=True` in SFTConfig (not fp16)
 
+### Retrieval Analysis (2026-02-17)
+- **75% ceiling**: with 40 chunks, only 164/219 records have the exact answer in chunks
+- **55 misses** broken down:
+  - 6 parser failures (<10 chunks): Mountain Home, Henderson, Peekskill
+  - 7 biennial budget confusion: Dothan, Davis, Birmingham
+  - 44 number in document but parser mangled it (millions prefix found, exact value not)
+  - 5 no trace of number at all
+- **Aryn vs PyMuPDF** (12 test records): Aryn 10/12 (83%), PyMuPDF 7/12 (58%)
+- **Chunk count doesn't matter**: answer is in top 5 or not at all
+- **Key insight**: 44/55 misses are table extraction quality — the number is there but garbled
+
 ### Next Steps
-1. Start VM, serve fine-tuned model: `vllm serve budget-mistral-lora-merged --port 8000 --max-model-len 16384`
-2. Pull latest code (test output formatting changes): `git pull`
-3. Test fine-tuned model: `python test_llm_extraction.py --llm-url http://localhost:8000/v1 --model budget-mistral-lora-merged --cache gold_chunks_cache.json`
-4. Compare results to baseline (Aryn 40%, PyMuPDF 25%)
-5. If accuracy improves, scale up training data and/or try more epochs
-6. Investigate the retrieval misses (mostly scanned/image-heavy PDFs)
+1. **Test Docling parser** (IBM, open source, local, free) on failing cities — see if table numbers survive
+   - Parse Vallejo, Peekskill, El Paso, Birmingham with Docling
+   - Compare exact number hit rate vs Aryn vs PyMuPDF
+2. If Docling wins, add as third parser collection (`budgets-docling`)
+3. Rebuild `gold_chunks_cache.json` with parser tags and 40 chunks via `build_gold_set.py`
+4. Revisit LLM fine-tuning after parsing ceiling is raised
 
 ### Debugging Tips
 - Check status: `python -m pipeline status`

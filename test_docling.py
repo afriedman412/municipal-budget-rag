@@ -12,7 +12,7 @@ import json
 import os
 import time
 
-from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.pipeline_options import AcceleratorDevice, AcceleratorOptions, PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
 
@@ -51,7 +51,8 @@ def main():
         key = (g["state"].lower(), g["city"].lower().replace(" ", "_"), g["year"], g["expense"])
         gold_lookup[key] = g["budget"]
 
-    pdf_options = PdfPipelineOptions(do_ocr=False)
+    accel = AcceleratorOptions(num_threads=4, device=AcceleratorDevice.CUDA)
+    pdf_options = PdfPipelineOptions(do_ocr=False, accelerator_options=accel)
     converter = DocumentConverter(
         format_options={"pdf": PdfFormatOption(pipeline_options=pdf_options)}
     )
