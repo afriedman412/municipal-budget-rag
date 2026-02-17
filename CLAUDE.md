@@ -205,12 +205,21 @@ Code transfer to VM via GitHub + deploy keys.
 - Peekskill NY: Aryn parser failed to produce usable chunks
 - Prompt changes alone didn't improve extraction accuracy — fine-tuning is the path forward
 
+### Fine-tuning Status
+- LoRA fine-tuning completed (3 epochs, ~2 hours on L4 GPU)
+- Merged model saved on VM at `budget-mistral-lora-merged/` (~14GB)
+- LoRA adapter saved at `budget-mistral-lora/` (~100MB)
+- VM is stopped; model persists on disk
+- Used `venv-finetune` for training (separate from `venv` for serving due to torch version conflict)
+- Fixed bf16/fp16 mismatch: L4 loads in bfloat16, so `bf16=True` in SFTConfig (not fp16)
+
 ### Next Steps
-1. Run fine-tuning on VM: `python finetune.py --data training_data.jsonl --epochs 3`
-2. Serve fine-tuned model: `vllm serve budget-mistral-lora-merged`
-3. Test fine-tuned model against 6 test cities with both parser caches
-4. If accuracy improves, scale up training data and/or try more epochs
-5. Investigate the retrieval misses (mostly scanned/image-heavy PDFs)
+1. Start VM, serve fine-tuned model: `vllm serve budget-mistral-lora-merged --port 8000 --max-model-len 16384`
+2. Pull latest code (test output formatting changes): `git pull`
+3. Test fine-tuned model: `python test_llm_extraction.py --llm-url http://localhost:8000/v1 --model budget-mistral-lora-merged --cache gold_chunks_cache.json`
+4. Compare results to baseline (Aryn 40%, PyMuPDF 25%)
+5. If accuracy improves, scale up training data and/or try more epochs
+6. Investigate the retrieval misses (mostly scanned/image-heavy PDFs)
 
 ### Debugging Tips
 - Check status: `python -m pipeline status`

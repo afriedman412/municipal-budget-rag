@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 
 from openai import OpenAI
 
@@ -74,22 +75,35 @@ def main():
     print(f"Testing {len(rows)}/{len(cache)} gold records")
     print(f"LLM: {args.llm_url} model={args.model} chunks={args.n_chunks}\n")
 
+    # Table header
+    print(f"{'State':<6} {'City':<20} {'Year':<6} {'Expense':<15} {'LLM Answer':<20} {'Expected':<20} {'In?':<5} {'Match'}")
+    print("-" * 100)
+
+    exact = 0
+    total = 0
+    in_chunks_count = 0
+
     for row in rows:
         state, city, year = row["state"], row["city"], row["year"]
         expense, expected = row["expense"], row["budget"]
 
-        print(f"\n{'='*70}")
-        print(f"  {city}, {state.upper()} ({year}) — {expense}")
-        print(f"  Expected: ${expected:,.0f}")
-        print(f"{'='*70}")
-
         chunks = row["chunks"][:args.n_chunks]
 
         if not chunks:
-            print("  No cached chunks for this record.")
+            print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {'NO CHUNKS':<20} ${expected:>14,.0f}      --    --")
+            total += 1
             continue
 
-        print(f"  Using {len(chunks)} chunks")
+        # Check if expected value appears in chunks
+        expected_int = int(expected)
+        # Build search patterns: "110,304,890" and "110304890"
+        expected_formatted = f"{expected_int:,}"
+        expected_plain = str(expected_int)
+        all_chunk_text = " ".join(c["text"] for c in chunks)
+        in_chunks = expected_formatted in all_chunk_text or expected_plain in all_chunk_text
+        if in_chunks:
+            in_chunks_count += 1
+        in_flag = "Y" if in_chunks else "N"
 
         chunk_text = "\n\n".join(
             f"[Chunk {i+1} | {c['metadata'].get('filename', '')} | parser: {c['metadata'].get('parser', '')}]\n{c['text']}"
@@ -101,17 +115,15 @@ def main():
         )
 
         if args.verbose:
-            print(f"\n  --- CHUNKS SENT TO LLM ---")
+            print(f"\n  --- CHUNKS SENT TO LLM ({city}, {state.upper()} {year} {expense}) ---")
             for i, c in enumerate(chunks):
                 print(f"  [Chunk {i+1} | {c['metadata'].get('filename', '')}]")
-                # Print first 300 chars of each chunk
                 preview = c['text'][:300].replace('\n', '\n  ')
                 print(f"  {preview}")
                 if len(c['text']) > 300:
                     print(f"  ... ({len(c['text'])} chars total)")
                 print()
 
-        print(f"  Querying LLM...")
         response = llm.chat.completions.create(
             model=args.model,
             messages=[{"role": "user", "content": prompt}],
@@ -119,8 +131,20 @@ def main():
         )
 
         answer = response.choices[0].message.content.strip()
-        print(f"  LLM answer:  {answer}")
-        print(f"  Expected:    ${expected:,.0f}")
+        expected_str = f"${expected:,.0f}"
+        match = answer.strip().replace(" ", "") == expected_str.replace(" ", "")
+        if match:
+            exact += 1
+        total += 1
+        flag = "OK" if match else "MISS"
+
+        print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer:<20} {expected_str:<20} {in_flag:<5} {flag}")
+
+    print("-" * 100)
+    if total:
+        print(f"Exact match: {exact}/{total} ({100*exact/total:.0f}%)  |  Answer in chunks: {in_chunks_count}/{total}")
+    else:
+        print("No records tested.")
 
 
 if __name__ == "__main__":
