@@ -13,6 +13,12 @@
   .controls label { font-weight: 600; margin-right: 8px; }
   .controls select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; margin-right: 20px; font-size: 14px; }
   .controls input[type="file"] { margin-right: 20px; }
+  .tabs { display: flex; gap: 0; margin-bottom: 20px; }
+  .tab { padding: 10px 20px; background: #fff; border: 1px solid #ddd; cursor: pointer; font-size: 0.9em; font-weight: 600; color: #666; }
+  .tab:first-child { border-radius: 8px 0 0 8px; }
+  .tab:last-child { border-radius: 0 8px 8px 0; }
+  .tab.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .tab:not(.active):hover { background: #f0f0f0; }
   .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
   .stat-card { background: #fff; padding: 16px 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 180px; }
   .stat-card .label { font-size: 0.85em; color: #666; margin-bottom: 4px; }
@@ -30,7 +36,7 @@
   .bar-fill.match { background: #16a34a; }
   .bar-fill.in-chunks { background: #2563eb; }
   .bar-value { width: 80px; text-align: right; font-size: 0.85em; font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
   th { background: #f8f8f8; text-align: left; padding: 10px 12px; font-size: 0.85em; font-weight: 600; border-bottom: 2px solid #e5e5e5; cursor: pointer; }
   th:hover { background: #eee; }
   td { padding: 8px 12px; font-size: 0.85em; border-bottom: 1px solid #f0f0f0; }
@@ -40,7 +46,7 @@
   .delta-improved { color: #16a34a; font-weight: 600; }
   .delta-regressed { color: #dc2626; font-weight: 600; }
   .delta-same { color: #888; }
-  .filter-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; }
+  .filter-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .filter-row select, .filter-row input { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
   .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600; }
   .chip.not_in_chunks { background: #fef3c7; color: #92400e; }
@@ -50,6 +56,10 @@
   .chip.no_number { background: #f1f5f9; color: #475569; }
   .chip.no_chunks { background: #f1f5f9; color: #475569; }
   .empty { text-align: center; padding: 40px; color: #888; }
+  .city-card { background: #fff; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
+  .city-card h3 { margin-bottom: 8px; font-size: 1em; }
+  .city-card table { box-shadow: none; margin-bottom: 0; }
+  .mini-bar { display: inline-block; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -59,13 +69,25 @@
   <label>Load runs:</label>
   <input type="file" id="fileInput" multiple accept=".json">
   <span id="fileStatus" style="color:#888; font-size:0.85em;"></span>
+  <span id="bucketStatus" style="color:#888; font-size:0.85em; margin-left:12px;"></span>
 </div>
 
-<div class="controls" id="runSelectors" style="display:none;">
+<div class="tabs" id="tabBar" style="display:none;">
+  <div class="tab active" data-tab="detail">Run Detail</div>
+  <div class="tab" data-tab="compare">All Runs</div>
+  <div class="tab" data-tab="city">By City</div>
+</div>
+
+<div id="detailControls" class="controls" style="display:none;">
   <label>Run A:</label>
   <select id="runA"></select>
   <label>Run B (compare):</label>
   <select id="runB"><option value="">— none —</option></select>
+</div>
+
+<div id="cityControls" class="controls" style="display:none;">
+  <label>City:</label>
+  <select id="citySelect"></select>
 </div>
 
 <div id="content">
@@ -74,7 +96,7 @@
 
 <script>
 const runs = {};
-let currentA = null, currentB = null;
+let currentA = null, currentB = null, currentTab = 'detail', currentCity = null;
 
 document.getElementById('fileInput').addEventListener('change', async (e) => {
   for (const file of e.target.files) {
@@ -85,21 +107,45 @@ document.getElementById('fileInput').addEventListener('change', async (e) => {
   }
   updateSelectors();
   document.getElementById('fileStatus').textContent = `${Object.keys(runs).length} run(s) loaded`;
+  document.getElementById('tabBar').style.display = '';
+});
+
+document.getElementById('tabBar').addEventListener('click', (e) => {
+  const tab = e.target.dataset.tab;
+  if (!tab) return;
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.getElementById('detailControls').style.display = tab === 'detail' ? '' : 'none';
+  document.getElementById('cityControls').style.display = tab === 'city' ? '' : 'none';
+  render();
 });
 
 function updateSelectors() {
   const names = Object.keys(runs).sort();
   if (!names.length) return;
-  document.getElementById('runSelectors').style.display = '';
+  document.getElementById('detailControls').style.display = currentTab === 'detail' ? '' : 'none';
   const selA = document.getElementById('runA');
   const selB = document.getElementById('runB');
   selA.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
   selB.innerHTML = `<option value="">— none —</option>` + names.map(n => `<option value="${n}">${n}</option>`).join('');
-  if (!currentA) { currentA = names[0]; render(); }
+
+  // Build city list from all runs
+  const cities = new Set();
+  for (const run of Object.values(runs)) {
+    for (const r of run.results) cities.add(`${r.city}, ${r.state.toUpperCase()}`);
+  }
+  const citySelect = document.getElementById('citySelect');
+  const sorted = [...cities].sort();
+  citySelect.innerHTML = sorted.map(c => `<option value="${c}">${c}</option>`).join('');
+  if (!currentCity && sorted.length) currentCity = sorted[0];
+
+  if (!currentA) { currentA = names[0]; }
+  render();
 }
 
 document.getElementById('runA').addEventListener('change', (e) => { currentA = e.target.value; render(); });
 document.getElementById('runB').addEventListener('change', (e) => { currentB = e.target.value || null; render(); });
+document.getElementById('citySelect').addEventListener('change', (e) => { currentCity = e.target.value; render(); });
 
 function classifyError(r) {
   if (r.no_chunks) return 'no_chunks';
@@ -138,6 +184,12 @@ function getExpenseBreakdown(run) {
 }
 
 function render() {
+  if (currentTab === 'detail') renderDetail();
+  else if (currentTab === 'compare') renderCompare();
+  else if (currentTab === 'city') renderCity();
+}
+
+function renderDetail() {
   const content = document.getElementById('content');
   if (!currentA || !runs[currentA]) { content.innerHTML = '<div class="empty">Select a run.</div>'; return; }
   const a = runs[currentA];
@@ -145,20 +197,28 @@ function render() {
 
   let html = '';
 
-  // Stats cards
   const ma = a.match, ta = a.total, ia = a.in_chunks;
   html += '<div class="stats">';
   html += statCard('Match Rate', `${pct(ma,ta)}%`, `${ma}/${ta}`);
   html += statCard('In Chunks', `${pct(ia,ta)}%`, `${ia}/${ta}`);
   html += statCard('Extraction Rate', `${pct(ma,ia)}%`, `${ma}/${ia} (when in chunks)`);
   if (b) {
-    const delta = b.match - a.match;
-    const cls = delta > 0 ? 'improved' : delta < 0 ? 'regressed' : '';
-    html += statCard('Delta (B−A)', `${delta > 0 ? '+' : ''}${delta}`, `${pct(b.match,b.total)}% vs ${pct(ma,ta)}%`, cls);
+    const key_fn = r => `${r.state}|${r.city}|${r.year}|${r.expense}`;
+    const aMap = Object.fromEntries(a.results.map(r => [key_fn(r), r]));
+    const bMap = Object.fromEntries(b.results.map(r => [key_fn(r), r]));
+    let gained = 0, lost = 0;
+    for (const k of Object.keys(aMap)) {
+      if (bMap[k]) {
+        if (!aMap[k].match && bMap[k].match) gained++;
+        if (aMap[k].match && !bMap[k].match) lost++;
+      }
+    }
+    const net = gained - lost;
+    const cls = net > 0 ? 'improved' : net < 0 ? 'regressed' : '';
+    html += statCard('Delta (B\u2212A)', `${net > 0 ? '+' : ''}${net}`, `+${gained} gained, \u2212${lost} lost`, cls);
   }
   html += '</div>';
 
-  // Expense breakdown
   const byA = getExpenseBreakdown(a);
   html += '<h2>By Expense Type</h2><div class="breakdown">';
   for (const exp of Object.keys(byA).sort()) {
@@ -175,7 +235,6 @@ function render() {
   }
   html += '</div>';
 
-  // Results table
   html += '<h2>Per-Record Results</h2>';
   html += '<div class="filter-row"><label>Filter:</label>';
   const expenses = [...new Set(a.results.map(r => r.expense))].sort();
@@ -199,19 +258,19 @@ function render() {
     const key = `${r.state}|${r.city}|${r.year}|${r.expense}`;
     const rb = bMap[key];
     const errCat = r.match ? '' : classifyError(r);
-    const ansA = r.answer ? (r.answer.length > 40 ? r.answer.slice(0,40)+'...' : r.answer) : (r.no_chunks ? 'NO CHUNKS' : '—');
+    const ansA = r.answer ? (r.answer.length > 40 ? r.answer.slice(0,40)+'...' : r.answer) : (r.no_chunks ? 'NO CHUNKS' : '\u2014');
     const expStr = `$${parseInt(r.expected).toLocaleString()}`;
     let deltaStr = '', deltaCls = '';
     if (b && rb) {
       if (!r.match && rb.match) { deltaStr = 'IMPROVED'; deltaCls = 'delta-improved'; }
       else if (r.match && !rb.match) { deltaStr = 'REGRESSED'; deltaCls = 'delta-regressed'; }
-      else { deltaStr = '—'; deltaCls = 'delta-same'; }
+      else { deltaStr = '\u2014'; deltaCls = 'delta-same'; }
     }
 
     html += `<tr data-expense="${r.expense}" data-match="${r.match?'ok':'miss'}" data-in="${r.in_chunks?'y':'n'}" data-delta="${deltaStr.toLowerCase()}">`;
     html += `<td>${r.state.toUpperCase()}</td><td>${r.city}</td><td>${r.year}</td><td>${r.expense}</td>`;
     html += `<td>${esc(ansA)}</td>`;
-    if (b) { const ansB = rb ? (rb.answer ? (rb.answer.length>40?rb.answer.slice(0,40)+'...':rb.answer) : '—') : '—'; html += `<td>${esc(ansB)}</td>`; }
+    if (b) { const ansB = rb ? (rb.answer ? (rb.answer.length>40?rb.answer.slice(0,40)+'...':rb.answer) : '\u2014') : '\u2014'; html += `<td>${esc(ansB)}</td>`; }
     html += `<td>${expStr}</td>`;
     html += `<td>${r.in_chunks ? 'Y' : 'N'}</td>`;
     html += `<td class="${r.match ? 'ok' : 'miss'}">${r.match ? 'OK' : 'MISS'}</td>`;
@@ -223,9 +282,109 @@ function render() {
 
   content.innerHTML = html;
 
-  // Wire up filters
   const filterEls = ['fExpense', 'fMatch', 'fInChunks', 'fDelta'].map(id => document.getElementById(id)).filter(Boolean);
   filterEls.forEach(el => el.addEventListener('change', applyFilters));
+}
+
+function renderCompare() {
+  const content = document.getElementById('content');
+  const names = Object.keys(runs).sort();
+  if (!names.length) { content.innerHTML = '<div class="empty">Load runs to compare.</div>'; return; }
+
+  let html = '<h2>All Runs</h2>';
+  html += '<table><thead><tr>';
+  html += '<th>Run</th><th>Date</th><th>Model</th><th>Chunks</th><th>Match</th><th>In Chunks</th><th>Extraction Rate</th><th style="width:200px;">Match Rate</th>';
+  html += '</tr></thead><tbody>';
+
+  for (const name of names) {
+    const r = runs[name];
+    const date = r.timestamp ? new Date(r.timestamp).toLocaleString() : '\u2014';
+    const model = r.model ? r.model.split('/').pop() : '\u2014';
+    const m = r.match, t = r.total, ic = r.in_chunks;
+    const matchPct = pct(m, t);
+    const extPct = pct(m, ic);
+    const barW = Math.round(100 * m / t);
+
+    html += '<tr>';
+    html += `<td><strong>${esc(name)}</strong></td>`;
+    html += `<td>${date}</td>`;
+    html += `<td>${esc(model)}</td>`;
+    html += `<td>${r.n_chunks}</td>`;
+    html += `<td>${m}/${t} (${matchPct}%)</td>`;
+    html += `<td>${ic}/${t} (${pct(ic,t)}%)</td>`;
+    html += `<td>${m}/${ic} (${extPct}%)</td>`;
+    html += `<td><div style="display:flex;align-items:center;gap:8px;"><div class="bar-bg" style="height:16px;flex:1;"><div class="bar-fill match" style="width:${barW}%"></div></div><span style="font-size:0.85em;font-weight:600;">${matchPct}%</span></div></td>`;
+    html += '</tr>';
+  }
+
+  html += '</tbody></table>';
+  content.innerHTML = html;
+}
+
+function renderCity() {
+  const content = document.getElementById('content');
+  if (!currentCity) { content.innerHTML = '<div class="empty">Select a city.</div>'; return; }
+
+  const [cityName, stateCode] = currentCity.split(', ');
+  const state = stateCode;
+  const city = cityName;
+
+  const names = Object.keys(runs).sort();
+  if (!names.length) { content.innerHTML = '<div class="empty">Load runs first.</div>'; return; }
+
+  // Collect all records for this city across all runs
+  // Group by (year, expense)
+  const recordKeys = new Set();
+  for (const run of Object.values(runs)) {
+    for (const r of run.results) {
+      if (r.city === city && r.state === state) {
+        recordKeys.add(`${r.year}|${r.expense}`);
+      }
+    }
+  }
+
+  const sorted = [...recordKeys].sort();
+  if (!sorted.length) { content.innerHTML = `<div class="empty">No records for ${currentCity}.</div>`; return; }
+
+  let html = `<h2>${currentCity}</h2>`;
+
+  for (const key of sorted) {
+    const [year, expense] = key.split('|');
+
+    // Find expected value from first run that has it
+    let expected = null;
+    for (const run of Object.values(runs)) {
+      const rec = run.results.find(r => r.city === city && r.state === state && r.year == year && r.expense === expense);
+      if (rec) { expected = rec.expected; break; }
+    }
+    const expStr = expected ? `$${parseInt(expected).toLocaleString()}` : '\u2014';
+
+    html += `<div class="city-card"><h3>${expense} \u2014 FY ${year} <span style="font-weight:400;color:#666;">(expected: ${expStr})</span></h3>`;
+    html += '<table><thead><tr><th>Run</th><th>Chunks</th><th>Answer</th><th>Match</th><th>In Chunks</th><th>Error</th></tr></thead><tbody>';
+
+    for (const name of names) {
+      const run = runs[name];
+      const rec = run.results.find(r => r.city === city && r.state === state && r.year == year && r.expense === expense);
+      if (!rec) {
+        html += `<tr><td>${esc(name)}</td><td>${run.n_chunks}</td><td style="color:#888;">\u2014</td><td>\u2014</td><td>\u2014</td><td></td></tr>`;
+        continue;
+      }
+      const ans = rec.answer ? (rec.answer.length > 50 ? rec.answer.slice(0,50)+'...' : rec.answer) : (rec.no_chunks ? 'NO CHUNKS' : '\u2014');
+      const errCat = rec.match ? '' : classifyError(rec);
+      html += '<tr>';
+      html += `<td>${esc(name)}</td>`;
+      html += `<td>${run.n_chunks}</td>`;
+      html += `<td>${esc(ans)}</td>`;
+      html += `<td class="${rec.match ? 'ok' : 'miss'}">${rec.match ? 'OK' : 'MISS'}</td>`;
+      html += `<td>${rec.in_chunks ? 'Y' : 'N'}</td>`;
+      html += `<td>${errCat ? `<span class="chip ${errCat}">${errCat}</span>` : ''}</td>`;
+      html += '</tr>';
+    }
+
+    html += '</tbody></table></div>';
+  }
+
+  content.innerHTML = html;
 }
 
 function applyFilters() {
@@ -253,6 +412,43 @@ function barRow(label, val, total, cls) {
 }
 function pct(a, b) { return b ? (100*a/b).toFixed(0) : '0'; }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// Auto-load from GCS bucket via ?bucket= query param
+(async function autoLoad() {
+  const params = new URLSearchParams(window.location.search);
+  const bucket = params.get('bucket');
+  if (!bucket) return;
+
+  const base = `https://storage.googleapis.com/${bucket}/runs`;
+  const status = document.getElementById('bucketStatus');
+  status.textContent = `Loading from gs://${bucket}...`;
+
+  try {
+    const indexResp = await fetch(`${base}/index.json`);
+    if (!indexResp.ok) throw new Error(`index.json: ${indexResp.status}`);
+    const files = await indexResp.json();
+
+    let loaded = 0;
+    for (const file of files) {
+      try {
+        const resp = await fetch(`${base}/${file}`);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        runs[file.replace('.json', '')] = data;
+        loaded++;
+      } catch (e) { console.warn(`Failed to load ${file}:`, e); }
+    }
+
+    status.textContent = `Loaded ${loaded} run(s) from gs://${bucket}`;
+    if (loaded) {
+      updateSelectors();
+      document.getElementById('tabBar').style.display = '';
+    }
+  } catch (e) {
+    status.textContent = `Failed to load from bucket: ${e.message}`;
+    console.error(e);
+  }
+})();
 </script>
 </body>
 </html>
