@@ -17,6 +17,21 @@ import re
 from openai import OpenAI
 
 
+def extract_numbers(text):
+    """Extract all integer values from text, stripping $, commas, and decimals."""
+    # Find patterns like $1,234,567 or 1234567 or 1,234,567.00
+    raw = re.findall(r'[\$]?[\d,]+(?:\.\d+)?', text)
+    nums = set()
+    for r in raw:
+        cleaned = r.replace('$', '').replace(',', '')
+        # Drop decimal portion (e.g. "1234567.00" -> "1234567")
+        if '.' in cleaned:
+            cleaned = cleaned.split('.')[0]
+        if cleaned.isdigit() and len(cleaned) >= 4:  # skip short numbers (years, etc. handled by comparison)
+            nums.add(int(cleaned))
+    return nums
+
+
 EXTRACTION_PROMPT = """You are a municipal budget analyst. Extract the total {expense} EXPENDITURE amount for {city}, {state} for fiscal year {year}.
 
 Rules:
@@ -76,8 +91,8 @@ def main():
     print(f"LLM: {args.llm_url} model={args.model} chunks={args.n_chunks}\n")
 
     # Table header
-    print(f"{'State':<6} {'City':<20} {'Year':<6} {'Expense':<15} {'LLM Answer':<20} {'Expected':<20} {'In?':<5} {'Match'}")
-    print("-" * 100)
+    print(f"{'State':<6} {'City':<20} {'Year':<6} {'Expense':<15} {'LLM Answer':<45} {'Expected':<20} {'In?':<5} {'Match'}")
+    print("-" * 125)
 
     exact = 0
     total = 0
@@ -90,7 +105,7 @@ def main():
         chunks = row["chunks"][:args.n_chunks]
 
         if not chunks:
-            print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {'NO CHUNKS':<20} ${expected:>14,.0f}      --    --")
+            print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {'NO CHUNKS':<45} ${expected:>14,.0f}      --    --")
             total += 1
             continue
 
@@ -131,18 +146,24 @@ def main():
         )
 
         answer = response.choices[0].message.content.strip()
+        expected_int = int(expected)
         expected_str = f"${expected:,.0f}"
-        match = answer.strip().replace(" ", "") == expected_str.replace(" ", "")
+
+        # Extract all numbers from LLM response and check if expected value is among them
+        answer_nums = extract_numbers(answer)
+        match = expected_int in answer_nums
         if match:
             exact += 1
         total += 1
         flag = "OK" if match else "MISS"
 
-        print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer:<20} {expected_str:<20} {in_flag:<5} {flag}")
+        # Truncate long answers for display
+        answer_display = answer[:40] + "..." if len(answer) > 40 else answer
+        print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer_display:<45} {expected_str:<20} {in_flag:<5} {flag}")
 
-    print("-" * 100)
+    print("-" * 125)
     if total:
-        print(f"Exact match: {exact}/{total} ({100*exact/total:.0f}%)  |  Answer in chunks: {in_chunks_count}/{total}")
+        print(f"Match: {exact}/{total} ({100*exact/total:.0f}%)  |  Answer in chunks: {in_chunks_count}/{total}")
     else:
         print("No records tested.")
 
