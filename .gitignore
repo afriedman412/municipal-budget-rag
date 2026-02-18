@@ -21,10 +21,7 @@ chroma_data/
 pdfs/
 pdfs_2026/
 
-# Generated data files
-gold_chunks_*.json
-gold_validation_set.json
-gold_query_embeddings.json
+# Generated data files (large, local-only)
 training_data.jsonl
 *.csv
 matched_pdfs.txt
