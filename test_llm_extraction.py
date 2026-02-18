@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 from openai import OpenAI
 
@@ -97,6 +98,7 @@ def main():
     exact = 0
     total = 0
     in_chunks_count = 0
+    results = []
 
     for row in rows:
         state, city, year = row["state"], row["city"], row["year"]
@@ -106,6 +108,9 @@ def main():
 
         if not chunks:
             print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {'NO CHUNKS':<45} ${expected:>14,.0f}      --    --")
+            results.append({"state": state, "city": city, "year": year, "expense": expense,
+                            "expected": expected, "answer": None, "match": False,
+                            "in_chunks": False, "no_chunks": True})
             total += 1
             continue
 
@@ -157,6 +162,10 @@ def main():
         total += 1
         flag = "OK" if match else "MISS"
 
+        results.append({"state": state, "city": city, "year": year, "expense": expense,
+                        "expected": expected, "answer": answer, "match": match,
+                        "in_chunks": in_chunks, "no_chunks": False})
+
         # Truncate long answers for display
         answer_display = answer[:40] + "..." if len(answer) > 40 else answer
         print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer_display:<45} {expected_str:<20} {in_flag:<5} {flag}")
@@ -166,6 +175,26 @@ def main():
         print(f"Match: {exact}/{total} ({100*exact/total:.0f}%)  |  Answer in chunks: {in_chunks_count}/{total}")
     else:
         print("No records tested.")
+
+    # Save structured results
+    run = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "model": args.model,
+        "n_chunks": args.n_chunks,
+        "cache_file": args.cache,
+        "total": total,
+        "match": exact,
+        "in_chunks": in_chunks_count,
+        "results": results,
+    }
+    os.makedirs("runs", exist_ok=True)
+    # Slug: model name (last path component) + chunks + timestamp
+    model_slug = args.model.rstrip("/").split("/")[-1]
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path = f"runs/{model_slug}_c{args.n_chunks}_{ts}.json"
+    with open(out_path, "w") as f:
+        json.dump(run, f, indent=2)
+    print(f"Results saved to {out_path}")
 
 
 if __name__ == "__main__":

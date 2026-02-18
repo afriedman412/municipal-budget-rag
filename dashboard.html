@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Extraction Test Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
+  h1 { margin-bottom: 20px; font-size: 1.5em; }
+  h2 { margin: 20px 0 10px; font-size: 1.2em; }
+  .controls { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .controls label { font-weight: 600; margin-right: 8px; }
+  .controls select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; margin-right: 20px; font-size: 14px; }
+  .controls input[type="file"] { margin-right: 20px; }
+  .stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat-card { background: #fff; padding: 16px 24px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); min-width: 180px; }
+  .stat-card .label { font-size: 0.85em; color: #666; margin-bottom: 4px; }
+  .stat-card .value { font-size: 1.8em; font-weight: 700; }
+  .stat-card .sub { font-size: 0.85em; color: #888; margin-top: 2px; }
+  .stat-card.improved .value { color: #16a34a; }
+  .stat-card.regressed .value { color: #dc2626; }
+  .breakdown { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .breakdown-card { background: #fff; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); flex: 1; min-width: 300px; }
+  .breakdown-card h3 { margin-bottom: 10px; font-size: 1em; }
+  .bar-row { display: flex; align-items: center; margin-bottom: 6px; }
+  .bar-label { width: 100px; font-size: 0.85em; }
+  .bar-bg { flex: 1; background: #e5e5e5; border-radius: 4px; height: 20px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .bar-fill.match { background: #16a34a; }
+  .bar-fill.in-chunks { background: #2563eb; }
+  .bar-value { width: 80px; text-align: right; font-size: 0.85em; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  th { background: #f8f8f8; text-align: left; padding: 10px 12px; font-size: 0.85em; font-weight: 600; border-bottom: 2px solid #e5e5e5; cursor: pointer; }
+  th:hover { background: #eee; }
+  td { padding: 8px 12px; font-size: 0.85em; border-bottom: 1px solid #f0f0f0; }
+  tr:hover { background: #f8f9fa; }
+  .ok { color: #16a34a; font-weight: 600; }
+  .miss { color: #dc2626; }
+  .delta-improved { color: #16a34a; font-weight: 600; }
+  .delta-regressed { color: #dc2626; font-weight: 600; }
+  .delta-same { color: #888; }
+  .filter-row { margin: 10px 0; display: flex; gap: 10px; align-items: center; }
+  .filter-row select, .filter-row input { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.75em; font-weight: 600; }
+  .chip.not_in_chunks { background: #fef3c7; color: #92400e; }
+  .chip.wrong_scope { background: #fee2e2; color: #991b1b; }
+  .chip.close { background: #dbeafe; color: #1e40af; }
+  .chip.wrong_fund { background: #f3e8ff; color: #6b21a8; }
+  .chip.no_number { background: #f1f5f9; color: #475569; }
+  .chip.no_chunks { background: #f1f5f9; color: #475569; }
+  .empty { text-align: center; padding: 40px; color: #888; }
+</style>
+</head>
+<body>
+<h1>LLM Extraction Test Dashboard</h1>
+
+<div class="controls">
+  <label>Load runs:</label>
+  <input type="file" id="fileInput" multiple accept=".json">
+  <span id="fileStatus" style="color:#888; font-size:0.85em;"></span>
+</div>
+
+<div class="controls" id="runSelectors" style="display:none;">
+  <label>Run A:</label>
+  <select id="runA"></select>
+  <label>Run B (compare):</label>
+  <select id="runB"><option value="">— none —</option></select>
+</div>
+
+<div id="content">
+  <div class="empty">Load one or more run JSON files to get started.</div>
+</div>
+
+<script>
+const runs = {};
+let currentA = null, currentB = null;
+
+document.getElementById('fileInput').addEventListener('change', async (e) => {
+  for (const file of e.target.files) {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const name = file.name.replace('.json', '');
+    runs[name] = data;
+  }
+  updateSelectors();
+  document.getElementById('fileStatus').textContent = `${Object.keys(runs).length} run(s) loaded`;
+});
+
+function updateSelectors() {
+  const names = Object.keys(runs).sort();
+  if (!names.length) return;
+  document.getElementById('runSelectors').style.display = '';
+  const selA = document.getElementById('runA');
+  const selB = document.getElementById('runB');
+  selA.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
+  selB.innerHTML = `<option value="">— none —</option>` + names.map(n => `<option value="${n}">${n}</option>`).join('');
+  if (!currentA) { currentA = names[0]; render(); }
+}
+
+document.getElementById('runA').addEventListener('change', (e) => { currentA = e.target.value; render(); });
+document.getElementById('runB').addEventListener('change', (e) => { currentB = e.target.value || null; render(); });
+
+function classifyError(r) {
+  if (r.no_chunks) return 'no_chunks';
+  if (!r.in_chunks) return 'not_in_chunks';
+  if (!r.answer) return 'no_number';
+  const expected = parseInt(r.expected);
+  const nums = [];
+  const raw = r.answer.match(/[\$]?[\d,]+(?:\.\d+)?/g) || [];
+  for (const s of raw) {
+    let cleaned = s.replace(/[$,]/g, '');
+    if (cleaned.includes('.')) cleaned = cleaned.split('.')[0];
+    if (/^\d+$/.test(cleaned) && cleaned.length >= 4) nums.push(parseInt(cleaned));
+  }
+  if (!nums.length) return 'no_number';
+  const closest = nums.reduce((a, b) => Math.abs(a - expected) < Math.abs(b - expected) ? a : b);
+  const ratio = closest / expected;
+  if (ratio >= 0.85 && ratio <= 1.15) return 'close';
+  if (closest > expected * 1.5) return 'wrong_fund';
+  return 'wrong_scope';
+}
+
+function getExpenseBreakdown(run) {
+  const by = {};
+  for (const r of run.results) {
+    const exp = r.expense;
+    if (!by[exp]) by[exp] = { total: 0, match: 0, in_chunks: 0, errors: {} };
+    by[exp].total++;
+    if (r.match) by[exp].match++;
+    if (r.in_chunks) by[exp].in_chunks++;
+    if (!r.match) {
+      const cat = classifyError(r);
+      by[exp].errors[cat] = (by[exp].errors[cat] || 0) + 1;
+    }
+  }
+  return by;
+}
+
+function render() {
+  const content = document.getElementById('content');
+  if (!currentA || !runs[currentA]) { content.innerHTML = '<div class="empty">Select a run.</div>'; return; }
+  const a = runs[currentA];
+  const b = currentB ? runs[currentB] : null;
+
+  let html = '';
+
+  // Stats cards
+  const ma = a.match, ta = a.total, ia = a.in_chunks;
+  html += '<div class="stats">';
+  html += statCard('Match Rate', `${pct(ma,ta)}%`, `${ma}/${ta}`);
+  html += statCard('In Chunks', `${pct(ia,ta)}%`, `${ia}/${ta}`);
+  html += statCard('Extraction Rate', `${pct(ma,ia)}%`, `${ma}/${ia} (when in chunks)`);
+  if (b) {
+    const delta = b.match - a.match;
+    const cls = delta > 0 ? 'improved' : delta < 0 ? 'regressed' : '';
+    html += statCard('Delta (B−A)', `${delta > 0 ? '+' : ''}${delta}`, `${pct(b.match,b.total)}% vs ${pct(ma,ta)}%`, cls);
+  }
+  html += '</div>';
+
+  // Expense breakdown
+  const byA = getExpenseBreakdown(a);
+  html += '<h2>By Expense Type</h2><div class="breakdown">';
+  for (const exp of Object.keys(byA).sort()) {
+    const e = byA[exp];
+    html += `<div class="breakdown-card"><h3>${exp}</h3>`;
+    html += barRow('Match', e.match, e.total, 'match');
+    html += barRow('In chunks', e.in_chunks, e.total, 'in-chunks');
+    html += `<div style="margin-top:8px;font-size:0.82em;color:#666;">Extraction: ${e.match}/${e.in_chunks} (${pct(e.match,e.in_chunks)}%)</div>`;
+    if (Object.keys(e.errors).length) {
+      const errs = Object.entries(e.errors).sort((a,b) => b[1]-a[1]);
+      html += `<div style="margin-top:6px;">${errs.map(([k,v]) => `<span class="chip ${k}">${k}: ${v}</span> `).join('')}</div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  // Results table
+  html += '<h2>Per-Record Results</h2>';
+  html += '<div class="filter-row"><label>Filter:</label>';
+  const expenses = [...new Set(a.results.map(r => r.expense))].sort();
+  html += `<select id="fExpense"><option value="">All expenses</option>${expenses.map(e => `<option>${e}</option>`).join('')}</select>`;
+  html += `<select id="fMatch"><option value="">All</option><option value="ok">OK only</option><option value="miss">MISS only</option></select>`;
+  html += `<select id="fInChunks"><option value="">In chunks: any</option><option value="y">Y</option><option value="n">N</option></select>`;
+  if (b) html += `<select id="fDelta"><option value="">Delta: any</option><option value="improved">Improved</option><option value="regressed">Regressed</option></select>`;
+  html += '</div>';
+
+  html += '<table id="resultsTable"><thead><tr>';
+  html += '<th>State</th><th>City</th><th>Year</th><th>Expense</th><th>Answer (A)</th>';
+  if (b) html += '<th>Answer (B)</th>';
+  html += '<th>Expected</th><th>In?</th><th>Match</th>';
+  if (b) html += '<th>Delta</th>';
+  html += '<th>Error</th></tr></thead><tbody>';
+
+  const bMap = {};
+  if (b) for (const r of b.results) bMap[`${r.state}|${r.city}|${r.year}|${r.expense}`] = r;
+
+  for (const r of a.results) {
+    const key = `${r.state}|${r.city}|${r.year}|${r.expense}`;
+    const rb = bMap[key];
+    const errCat = r.match ? '' : classifyError(r);
+    const ansA = r.answer ? (r.answer.length > 40 ? r.answer.slice(0,40)+'...' : r.answer) : (r.no_chunks ? 'NO CHUNKS' : '—');
+    const expStr = `$${parseInt(r.expected).toLocaleString()}`;
+    let deltaStr = '', deltaCls = '';
+    if (b && rb) {
+      if (!r.match && rb.match) { deltaStr = 'IMPROVED'; deltaCls = 'delta-improved'; }
+      else if (r.match && !rb.match) { deltaStr = 'REGRESSED'; deltaCls = 'delta-regressed'; }
+      else { deltaStr = '—'; deltaCls = 'delta-same'; }
+    }
+
+    html += `<tr data-expense="${r.expense}" data-match="${r.match?'ok':'miss'}" data-in="${r.in_chunks?'y':'n'}" data-delta="${deltaStr.toLowerCase()}">`;
+    html += `<td>${r.state.toUpperCase()}</td><td>${r.city}</td><td>${r.year}</td><td>${r.expense}</td>`;
+    html += `<td>${esc(ansA)}</td>`;
+    if (b) { const ansB = rb ? (rb.answer ? (rb.answer.length>40?rb.answer.slice(0,40)+'...':rb.answer) : '—') : '—'; html += `<td>${esc(ansB)}</td>`; }
+    html += `<td>${expStr}</td>`;
+    html += `<td>${r.in_chunks ? 'Y' : 'N'}</td>`;
+    html += `<td class="${r.match ? 'ok' : 'miss'}">${r.match ? 'OK' : 'MISS'}</td>`;
+    if (b) html += `<td class="${deltaCls}">${deltaStr}</td>`;
+    html += `<td>${errCat ? `<span class="chip ${errCat}">${errCat}</span>` : ''}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+
+  content.innerHTML = html;
+
+  // Wire up filters
+  const filterEls = ['fExpense', 'fMatch', 'fInChunks', 'fDelta'].map(id => document.getElementById(id)).filter(Boolean);
+  filterEls.forEach(el => el.addEventListener('change', applyFilters));
+}
+
+function applyFilters() {
+  const fExp = (document.getElementById('fExpense') || {}).value || '';
+  const fMatch = (document.getElementById('fMatch') || {}).value || '';
+  const fIn = (document.getElementById('fInChunks') || {}).value || '';
+  const fDelta = (document.getElementById('fDelta') || {}).value || '';
+  const rows = document.querySelectorAll('#resultsTable tbody tr');
+  rows.forEach(tr => {
+    let show = true;
+    if (fExp && tr.dataset.expense !== fExp) show = false;
+    if (fMatch && tr.dataset.match !== fMatch) show = false;
+    if (fIn && tr.dataset.in !== fIn) show = false;
+    if (fDelta && tr.dataset.delta !== fDelta) show = false;
+    tr.style.display = show ? '' : 'none';
+  });
+}
+
+function statCard(label, value, sub, cls='') {
+  return `<div class="stat-card ${cls}"><div class="label">${label}</div><div class="value">${value}</div><div class="sub">${sub}</div></div>`;
+}
+function barRow(label, val, total, cls) {
+  const p = total ? (100*val/total) : 0;
+  return `<div class="bar-row"><span class="bar-label">${label}</span><div class="bar-bg"><div class="bar-fill ${cls}" style="width:${p}%"></div></div><span class="bar-value">${val}/${total} (${p.toFixed(0)}%)</span></div>`;
+}
+function pct(a, b) { return b ? (100*a/b).toFixed(0) : '0'; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+</body>
+</html>
