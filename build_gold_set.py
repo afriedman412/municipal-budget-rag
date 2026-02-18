@@ -113,7 +113,7 @@ async def main():
                     query_embedding=query_embedding,
                     city=chroma_city,
                     year=year,
-                    n_results=20,
+                    n_results=40,
                     state=state,
                 )
                 docs = results["documents"][0]

@@ -147,11 +147,20 @@ Code transfer to VM via GitHub + deploy keys.
 - Vallejo CA 2021, El Paso TX 2020, Corvallis OR 2018
 - Peekskill NY 2023, Carrollton GA 2022, Paducah KY 2022
 
-### LLM Extraction Results (Mistral 7B, no fine-tuning)
-- **Aryn parser**: 4/10 exact match (40%) — Peekskill had no chunks (parser failure)
-- **PyMuPDF parser**: 3/12 exact match (25%)
-- Common errors: wrong fund (water/sanitation vs GF), revenue vs expenditure, wrong fiscal year, sub-department vs total
-- **Diagnosis**: Correct numbers ARE in the chunks (Aryn 10/12, PyMuPDF 8/12) — this is primarily an **extraction problem**, not retrieval
+### LLM Extraction Results (209 gold records, gold_chunks_cache.json)
+
+| Model | Chunks | Match | In Chunks | Extraction Rate |
+|-------|--------|-------|-----------|-----------------|
+| Base Mistral 7B | 10 | 63/209 (30%) | 139/209 (67%) | 63/139 (45%) |
+| **Fine-tuned** | **5** | **79/209 (38%)** | 126/209 (60%) | **79/126 (63%)** |
+| **Fine-tuned** | **10** | **84/209 (40%)** | 139/209 (67%) | **84/139 (60%)** |
+
+- Fine-tuning improved extraction rate from 45% → 60% (same chunks)
+- Fine-tuned model outputs clean `$X,XXX,XXX` format (no more chatty responses)
+- More chunks improves retrieval but slightly hurts extraction (noise tradeoff)
+- **Error breakdown** (base, 10 chunks): wrong_scope 45, not_in_chunks 70, close_but_wrong 18, wrong_fund 7
+- **By expense type**: GF extraction 54%, Police extraction 38% — Police suffers more from wrong_scope (sub-department line items)
+- Test results saved as JSON in `runs/` directory for dashboard comparison
 
 ### Fine-tuning Pipeline
 1. **`build_training_data.py`** — Generates training examples from validation table + local PDFs
@@ -172,6 +181,9 @@ Code transfer to VM via GitHub + deploy keys.
 - `test_llm_extraction.py` — Test LLM extraction on cached chunks (runs on VM)
 - `build_training_data.py` — Generate fine-tuning JSONL from validation table + PDFs
 - `finetune.py` — LoRA fine-tune Mistral 7B on budget extraction
+- `test_docling.py` — Test Docling parser on test PDFs (number-in-text check)
+- `analyze_results.py` — Analyze/compare test run JSON files (GF vs Police, error categories, diffs)
+- `dashboard.html` — Browser-based dashboard for comparing test runs (load JSON files from `runs/`)
 - `test_budgets.json` — Defines the 6-city test set
 - `start_vm.sh` — Start GCP VM + launch vLLM + SSH session
 
@@ -206,12 +218,13 @@ Code transfer to VM via GitHub + deploy keys.
 - Prompt changes alone didn't improve extraction accuracy — fine-tuning is the path forward
 
 ### Fine-tuning Status
-- LoRA fine-tuning completed (3 epochs, ~2 hours on L4 GPU)
+- LoRA fine-tuning completed (3 epochs, ~2 hours on L4 GPU, 456 examples)
 - Merged model saved on VM at `budget-mistral-lora-merged/` (~14GB)
-- Fine-tuned model tested: 4/12 exact match on test set (same as baseline)
-- Conclusion: parsing/retrieval is the bottleneck, not LLM extraction
-- VM venvs rebuilt: `venv-vllm` (vLLM only), `venv-finetune` (unsloth + openai + everything else)
+- **Fine-tuning works**: extraction rate 45% → 60% on 209 records (10 chunks)
+- Model outputs clean dollar amounts, no more chatty/verbose responses
+- VM venvs: `venv-vllm` (vLLM serving), `venv-finetune` (unsloth + openai + training)
 - Fixed bf16/fp16 mismatch: L4 loads in bfloat16, so `bf16=True` in SFTConfig (not fp16)
+- Serve fine-tuned model: `vllm serve ~/budget-mistral-lora-merged --port 8000 --max-model-len 32768`
 
 ### Retrieval Analysis (2026-02-17)
 - **75% ceiling**: with 40 chunks, only 164/219 records have the exact answer in chunks
@@ -224,13 +237,27 @@ Code transfer to VM via GitHub + deploy keys.
 - **Chunk count doesn't matter**: answer is in top 5 or not at all
 - **Key insight**: 44/55 misses are table extraction quality — the number is there but garbled
 
+### Docling Parser Test (2026-02-17)
+- Installed Docling locally and on VM (`venv-finetune`)
+- `test_docling.py` — parses PDFs with Docling, checks if expected numbers appear in full text
+- **Result: too slow** — even on L4 GPU (2GB VRAM used, CUDA confirmed), 10+ minutes per large PDF
+- Docling uses ML-based layout detection (CPU-bound rendering + GPU inference) — not practical for production
+- Still waiting for full results to see accuracy vs Aryn/PyMuPDF
+
+### Parser Speed/Cost/Quality Comparison
+| Parser | Speed | Cost | Table Quality |
+|--------|-------|------|--------------|
+| Aryn | Fast (cloud) | $2/1000 pages | Good (83% hit rate) |
+| Docling | Very slow | Free (GPU time) | TBD |
+| PyMuPDF | Instant | Free | Poor (58% hit rate) |
+| pdfplumber | Fast | Free | Moderate (untested) |
+
 ### Next Steps
-1. **Test Docling parser** (IBM, open source, local, free) on failing cities — see if table numbers survive
-   - Parse Vallejo, Peekskill, El Paso, Birmingham with Docling
-   - Compare exact number hit rate vs Aryn vs PyMuPDF
-2. If Docling wins, add as third parser collection (`budgets-docling`)
-3. Rebuild `gold_chunks_cache.json` with parser tags and 40 chunks via `build_gold_set.py`
-4. Revisit LLM fine-tuning after parsing ceiling is raised
+1. **Find optimal chunk count** — testing 5/10/15 to find sweet spot (retrieval vs noise tradeoff)
+2. **Scale up training data** — more examples, especially Police wrong_scope cases
+3. **Test per-parser chunks** — run fine-tuned model on `gold_chunks_aryn.json` vs `gold_chunks_pymupdf.json`
+4. **Improve retrieval** — 33% of records still missing from chunks (parser quality issue)
+5. **Future**: consider pdfplumber as fast+free parser with table support
 
 ### Debugging Tips
 - Check status: `python -m pipeline status`

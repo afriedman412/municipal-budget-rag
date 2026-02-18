@@ -71,6 +71,61 @@ def get_total_pages(pdf_path):
     return n
 
 
+def page_features(page):
+    """Compute structural features for a PDF page (pass a fitz Page object)."""
+    text = page.get_text()
+    blocks = page.get_text("dict")["blocks"]
+    n_text = sum(1 for b in blocks if b["type"] == 0)
+    n_image = sum(1 for b in blocks if b["type"] == 1)
+    text_len = len(text)
+    # Table heuristic: lines with 3+ number-like tokens
+    lines = text.split('\n')
+    table_lines = sum(1 for l in lines if len(re.findall(r'\d[\d,]+', l)) >= 3)
+    has_tables = table_lines > 3
+    return {
+        "n_text": n_text, "n_image": n_image,
+        "text_len": text_len, "has_tables": has_tables,
+    }
+
+
+def page_similarity(target_feat, candidate_feat):
+    """Score how similar a candidate page is to the target (lower = more similar)."""
+    # Penalize text length difference
+    len_diff = abs(target_feat["text_len"] - candidate_feat["text_len"]) / max(target_feat["text_len"], 1)
+    # Reward matching table presence
+    table_bonus = -0.5 if target_feat["has_tables"] == candidate_feat["has_tables"] else 0.0
+    # Penalize image-only pages (no text blocks)
+    image_penalty = 2.0 if candidate_feat["n_text"] == 0 else 0.0
+    # Penalize very short pages (TOC, cover, dividers)
+    short_penalty = 1.0 if candidate_feat["text_len"] < 200 else 0.0
+    return len_diff + table_bonus + image_penalty + short_penalty
+
+
+def pick_distractors(pdf_path, target_page, n_distractors):
+    """Pick distractor pages that structurally resemble the target page."""
+    doc = fitz.open(pdf_path)
+    total = len(doc)
+    target_feat = page_features(doc[target_page])
+
+    # Score all other pages
+    candidates = []
+    for p in range(total):
+        if p == target_page:
+            continue
+        feat = page_features(doc[p])
+        score = page_similarity(target_feat, feat)
+        candidates.append((p, score))
+    doc.close()
+
+    # Sort by similarity (lowest score = most similar), take top N with some randomness
+    candidates.sort(key=lambda x: x[1])
+    # Pick from top 3x candidates to keep some variety
+    pool_size = min(len(candidates), n_distractors * 3)
+    pool = candidates[:pool_size]
+    chosen = random.sample(pool, min(n_distractors, len(pool)))
+    return [p for p, _ in chosen]
+
+
 def format_budget(value):
     """Format budget as dollar string."""
     return f"${value:,.0f}"
@@ -130,7 +185,6 @@ def main():
     skipped = 0
     for i, (record, pdf_path) in enumerate(sample):
         target_page = record["pdf_page"] - 1  # Convert to 0-indexed
-        total_pages = get_total_pages(pdf_path)
 
         # Extract target page text
         target_text = extract_page_text(pdf_path, target_page)
@@ -138,10 +192,8 @@ def main():
             skipped += 1
             continue
 
-        # Pick random distractor pages (not the target page)
-        other_pages = [p for p in range(total_pages) if p != target_page]
-        n_distractors = min(args.distractors, len(other_pages))
-        distractor_pages = random.sample(other_pages, n_distractors)
+        # Pick distractor pages that structurally resemble the target page
+        distractor_pages = pick_distractors(pdf_path, target_page, args.distractors)
 
         # Extract distractor texts
         distractor_texts = []
