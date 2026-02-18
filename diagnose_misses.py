@@ -4,9 +4,8 @@ Takes a run JSON + chunks cache, finds misses where the model returned a wrong
 number, and asks the LLM "what does $X represent in these chunks?"
 
 Usage:
-  python diagnose_misses.py                                              # Most recent run from GCS bucket
-  python diagnose_misses.py runs/some_run.json                           # Local file
-  python diagnose_misses.py --bucket my-bucket                           # Specific GCS bucket
+  python diagnose_misses.py                                              # Most recent run in runs/
+  python diagnose_misses.py runs/some_run.json                           # Specific local file
   python diagnose_misses.py --llm-url http://localhost:8000/v1 --model budget-mistral-lora-merged
   python diagnose_misses.py --limit 10                                   # Only diagnose 10 misses
 """

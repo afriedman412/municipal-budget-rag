@@ -24,9 +24,11 @@ import fitz  # PyMuPDF
 PDF_DIR = Path("pdfs_2026")
 
 SYSTEM_PROMPT = """You are a municipal budget analyst. You will be given excerpts from a municipal budget document and asked to extract a specific expenditure amount. Follow these rules:
-- Return EXPENDITURES, not revenue
-- Return the BUDGETED amount or the APPROPRIATED amount, not actual values
-- Prefer ADOPTED budget over proposed or mayor's recommended
+- Return EXPENDITURES only — never revenue or income figures
+- Return the ADOPTED or APPROVED budget amount — never proposed, recommended, or estimated
+- If both proposed and adopted values appear, you MUST return the adopted value
+- Return the BUDGETED or APPROPRIATED amount, not actual/historical spending
+- For Police, return the General Fund police expenditure, not all-funds or total city budget
 - Return ONLY the numeric dollar amount (e.g. "$1,234,567")
 - If you cannot find the value, return "NOT FOUND"
 """
@@ -38,7 +40,7 @@ Budget document excerpts:
 {chunks}
 ---
 
-Total {expense} budgeted expenditure for FY {year}:"""
+ADOPTED {expense} expenditure for FY {year}:"""
 
 
 def find_pdf(state, city, year):

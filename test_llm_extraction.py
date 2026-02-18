@@ -71,9 +71,11 @@ def find_value_in_chunks(chunks, expected_int):
 EXTRACTION_PROMPT = """You are a municipal budget analyst. Extract the total {expense} EXPENDITURE amount for {city}, {state} for fiscal year {year}.
 
 Rules:
-- Return EXPENDITURES, not revenue
-- Return the BUDGETED amount or the APPROPRIATED amount, not actual values
-- Prefer ADOPTED budget over proposed or mayor's recommended
+- Return EXPENDITURES only — never revenue or income figures
+- Return the ADOPTED or APPROVED budget amount — never proposed, recommended, or estimated
+- If both proposed and adopted values appear, you MUST return the adopted value
+- Return the BUDGETED or APPROPRIATED amount, not actual/historical spending
+- For Police, return the General Fund police expenditure, not all-funds or total city budget
 - Return ONLY the numeric dollar amount (e.g. "$1,234,567")
 - If you cannot find the value, return "NOT FOUND"
 
@@ -82,7 +84,7 @@ Budget document excerpts:
 {chunks}
 ---
 
-Total {expense} budgeted expenditure for FY {year}:"""
+ADOPTED {expense} expenditure for FY {year}:"""
 
 
 def call_llm(llm, model, prompt):
@@ -182,33 +184,10 @@ def main():
             **chunk_info,
         }, prompt))
 
-    # Phase 2: Run LLM calls (parallel or sequential)
+    # Phase 2+3: Run LLM calls and print results as they arrive
     llm_tasks = [(idx, data, prompt) for idx, data, prompt in tasks if prompt is not None]
-    answers = {}  # idx -> answer string
+    task_map = {idx: data for idx, data, _ in tasks}
 
-    if args.workers > 1 and llm_tasks:
-        print(f"Sending {len(llm_tasks)} requests with {args.workers} workers...", end=" ", flush=True)
-        done = 0
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {
-                executor.submit(call_llm, llm, args.model, prompt): idx
-                for idx, _, prompt in llm_tasks
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                try:
-                    answers[idx] = future.result()
-                except Exception as e:
-                    answers[idx] = f"ERROR: {e}"
-                done += 1
-                if done % 20 == 0 or done == len(llm_tasks):
-                    print(f"{done}/{len(llm_tasks)}", end=" ", flush=True)
-        print()
-    else:
-        for idx, data, prompt in llm_tasks:
-            answers[idx] = call_llm(llm, args.model, prompt)
-
-    # Phase 3: Compile results and print table
     print(f"{'State':<6} {'City':<20} {'Year':<6} {'Expense':<15} {'LLM Answer':<45} {'Expected':<20} {'In?':<5} {'Match'}")
     print("-" * 125)
 
@@ -217,23 +196,18 @@ def main():
     in_chunks_count = 0
     results = []
 
-    for idx, data, prompt in tasks:
+    def process_result(idx, answer):
+        """Score a result and print it. Returns the result dict."""
+        nonlocal exact, total, in_chunks_count
+        data = task_map[idx]
         state, city, year = data["state"], data["city"], data["year"]
         expense, expected = data["expense"], data["expected"]
-
-        if data["no_chunks"]:
-            print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {'NO CHUNKS':<45} ${expected:>14,.0f}      --    --")
-            results.append(data)
-            total += 1
-            continue
 
         if data["in_chunks"]:
             in_chunks_count += 1
 
-        answer = answers.get(idx, "ERROR: no response")
         expected_int = int(expected)
         expected_str = f"${expected:,.0f}"
-
         answer_nums = extract_numbers(answer)
         match = expected_int in answer_nums
         if match:
@@ -242,11 +216,38 @@ def main():
         flag = "OK" if match else "MISS"
         in_flag = "Y" if data["in_chunks"] else "N"
 
-        result = {**data, "answer": answer, "match": match}
-        results.append(result)
-
         answer_display = answer[:40] + "..." if len(answer) > 40 else answer
         print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer_display:<45} {expected_str:<20} {in_flag:<5} {flag}")
+
+        return {**data, "answer": answer, "match": match}
+
+    # Print no-chunks rows first
+    for idx, data, prompt in tasks:
+        if data.get("no_chunks"):
+            state, city, year = data["state"], data["city"], data["year"]
+            expense, expected = data["expense"], data["expected"]
+            print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {'NO CHUNKS':<45} ${expected:>14,.0f}      --    --")
+            results.append(data)
+            total += 1
+
+    # Run LLM calls
+    if args.workers > 1 and llm_tasks:
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(call_llm, llm, args.model, prompt): idx
+                for idx, _, prompt in llm_tasks
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    answer = future.result()
+                except Exception as e:
+                    answer = f"ERROR: {e}"
+                results.append(process_result(idx, answer))
+    else:
+        for idx, data, prompt in llm_tasks:
+            answer = call_llm(llm, args.model, prompt)
+            results.append(process_result(idx, answer))
 
     print("-" * 125)
     if total:
