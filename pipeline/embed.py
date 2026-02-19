@@ -121,7 +121,7 @@ class EmbeddingClient:
         )
         return [item.embedding for item in response.data]
 
-    async def embed_chunks(self, chunks: list[Chunk], batch_size: int = 100) -> list[Chunk]:
+    async def embed_chunks(self, chunks: list[Chunk], batch_size: int = 50) -> list[Chunk]:
         """Embed all chunks, batching API calls."""
         if not chunks:
             return []
@@ -130,7 +130,7 @@ class EmbeddingClient:
         all_embeddings = []
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
-            texts = [c.text for c in batch]
+            texts = [c.text[:2500] for c in batch]  # truncate to stay under 8192 token limit
             embeddings = await self.embed_texts(texts)
             all_embeddings.extend(embeddings)
 

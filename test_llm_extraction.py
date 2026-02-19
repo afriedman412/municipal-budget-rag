@@ -69,9 +69,7 @@ def find_value_in_chunks(chunks, expected_int):
     }
 
 
-EXTRACTION_PROMPT = """You are a municipal budget analyst. Extract the total {expense} EXPENDITURE amount for {city}, {state} for fiscal year {year}.
-
-Rules:
+SYSTEM_PROMPT = """You are a municipal budget analyst. You will be given excerpts from a municipal budget document and asked to extract a specific expenditure amount. Follow these rules:
 - Return EXPENDITURES only — never revenue or income figures
 - Return the ADOPTED or APPROVED budget amount — never proposed, recommended, or estimated
 - If both proposed and adopted values appear, you MUST return the adopted value
@@ -79,6 +77,9 @@ Rules:
 - For Police, return the General Fund police expenditure, not all-funds or total city budget
 - Return ONLY the numeric dollar amount (e.g. "$1,234,567")
 - If you cannot find the value, return "NOT FOUND"
+"""
+
+USER_TEMPLATE = """Extract the total {expense} EXPENDITURE amount for {city}, {state} for fiscal year {year}.
 
 Budget document excerpts:
 ---
@@ -88,11 +89,14 @@ Budget document excerpts:
 ADOPTED {expense} expenditure for FY {year}:"""
 
 
-def call_llm(llm, model, prompt):
+def call_llm(llm, model, system, prompt):
     """Make a single LLM call. Returns the answer string."""
     response = llm.chat.completions.create(
         model=model,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
         temperature=0,
     )
     return response.choices[0].message.content.strip()
@@ -163,10 +167,10 @@ def main():
         in_chunks, chunk_info = find_value_in_chunks(chunks, expected_int)
 
         chunk_text = "\n\n".join(
-            f"[Chunk {i+1} | {c['metadata'].get('filename', '')} | parser: {c['metadata'].get('parser', '')}]\n{c['text']}"
+            f"[Chunk {i+1}]\n{c['text']}"
             for i, c in enumerate(chunks)
         )
-        prompt = EXTRACTION_PROMPT.format(
+        prompt = USER_TEMPLATE.format(
             expense=expense, city=city, state=state, year=year, chunks=chunk_text
         )
 
@@ -236,7 +240,7 @@ def main():
     if args.workers > 1 and llm_tasks:
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {
-                executor.submit(call_llm, llm, args.model, prompt): idx
+                executor.submit(call_llm, llm, args.model, SYSTEM_PROMPT, prompt): idx
                 for idx, _, prompt in llm_tasks
             }
             for future in as_completed(futures):
@@ -248,7 +252,7 @@ def main():
                 results.append(process_result(idx, answer))
     else:
         for idx, data, prompt in llm_tasks:
-            answer = call_llm(llm, args.model, prompt)
+            answer = call_llm(llm, args.model, SYSTEM_PROMPT, prompt)
             results.append(process_result(idx, answer))
 
     print("-" * 125)
