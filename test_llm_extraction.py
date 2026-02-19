@@ -98,6 +98,7 @@ def call_llm(llm, model, system, prompt):
             {"role": "user", "content": prompt},
         ],
         temperature=0,
+        max_tokens=50,
     )
     return response.choices[0].message.content.strip()
 
