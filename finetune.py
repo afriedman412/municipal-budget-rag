@@ -6,12 +6,13 @@ Run on GPU (L4 24GB is sufficient).
 Usage:
   python finetune.py                              # Default settings
   python finetune.py --epochs 3 --lr 2e-4         # Custom hyperparams
-  python finetune.py --data training_data.jsonl    # Custom data file
+  python finetune.py --data training/training_data.jsonl  # Custom data file
 """
 
 import argparse
 import json
 
+from paths import TRAINING_DIR
 from unsloth import FastLanguageModel
 from datasets import Dataset
 from trl import SFTTrainer, SFTConfig
@@ -37,7 +38,7 @@ def format_chat(example, tokenizer):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="training_data.jsonl")
+    parser.add_argument("--data", default=str(TRAINING_DIR / "training_data.jsonl"))
     parser.add_argument("--model", default="mistralai/Mistral-7B-Instruct-v0.3")
     parser.add_argument("--output", default="budget-mistral-lora")
     parser.add_argument("--epochs", type=int, default=3)

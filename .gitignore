@@ -21,8 +21,9 @@ chroma_data/
 pdfs/
 pdfs_2026/
 
-# Generated data files (large, local-only)
-training_data.jsonl
+# Training data & gold sets (large, local-only)
+training/
+page_features_cache.json
 *.csv
 matched_pdfs.txt
 pipeline_metrics.json

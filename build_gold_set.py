@@ -10,6 +10,7 @@ import sqlite3
 from dotenv import load_dotenv
 load_dotenv()
 
+from paths import TRAINING_DIR
 from pipeline.config import Config
 from pipeline.chroma import ChromaClient
 from pipeline.embed import EmbeddingClient
@@ -67,10 +68,10 @@ async def main():
 
     print(f"Matched {len(gold)} validation records across {len(set((g['state'], g['city'], g['year']) for g in gold))} city/year combos")
 
-    with open("gold_validation_set.json", "w") as f:
+    with open(TRAINING_DIR / "gold_validation_set.json", "w") as f:
         json.dump(gold, f, indent=2)
 
-    print("Saved to gold_validation_set.json")
+    print(f"Saved to {TRAINING_DIR}/gold_validation_set.json")
 
     # Cache query embeddings
     print("\nGenerating query embeddings...")
@@ -80,10 +81,10 @@ async def main():
         emb = await embedder.embed_texts([query])
         query_embeddings[expense_type] = emb[0]
 
-    with open("gold_query_embeddings.json", "w") as f:
+    with open(TRAINING_DIR / "gold_query_embeddings.json", "w") as f:
         json.dump(query_embeddings, f)
 
-    print(f"Saved 3 query embeddings to gold_query_embeddings.json")
+    print(f"Saved 3 query embeddings to {TRAINING_DIR}/gold_query_embeddings.json")
 
     # Cache retrieved chunks for each gold record, per parser collection
     collections = {
@@ -137,7 +138,7 @@ async def main():
             if (i + 1) % 20 == 0:
                 print(f"  {i + 1}/{len(gold)} records cached...")
 
-        outfile = f"gold_chunks_{parser_name}.json"
+        outfile = TRAINING_DIR / f"gold_chunks_{parser_name}.json"
         with open(outfile, "w") as f:
             json.dump(chunks_cache, f)
 

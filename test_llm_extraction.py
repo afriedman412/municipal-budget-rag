@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from openai import OpenAI
+from paths import TRAINING_DIR, RUNS_DIR
 
 
 def extract_numbers(text):
@@ -107,8 +108,9 @@ def main():
                         help="Number of gold records to test (default: use test_budgets.json)")
     parser.add_argument("--n-chunks", type=int, default=20,
                         help="Max chunks to use per query")
-    parser.add_argument("--cache", default="gold_chunks_cache.json",
-                        help="Chunks cache file (default: gold_chunks_cache.json)")
+    parser.add_argument("--cache",
+                        default=str(TRAINING_DIR / "gold_chunks_cache.json"),
+                        help="Chunks cache file")
     parser.add_argument("--city", nargs=3, action="append", metavar=("CITY", "STATE", "YEAR"),
                         help="Filter to specific city/state/year (repeatable)")
     parser.add_argument("--verbose", "-v", action="store_true",
@@ -267,17 +269,17 @@ def main():
         "in_chunks": in_chunks_count,
         "results": results,
     }
-    os.makedirs("runs", exist_ok=True)
+    os.makedirs(RUNS_DIR, exist_ok=True)
     model_slug = args.model.rstrip("/").split("/")[-1]
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = f"runs/{model_slug}_c{args.n_chunks}_{ts}.json"
+    out_path = str(RUNS_DIR / f"{model_slug}_c{args.n_chunks}_{ts}.json")
     with open(out_path, "w") as f:
         json.dump(run, f, indent=2)
     print(f"Results saved to {out_path}")
 
     # Update runs index for dashboard auto-loading
-    run_files = sorted(f for f in os.listdir("runs") if f.endswith(".json") and f != "index.json")
-    with open("runs/index.json", "w") as f:
+    run_files = sorted(f for f in os.listdir(RUNS_DIR) if f.endswith(".json") and f != "index.json")
+    with open(RUNS_DIR / "index.json", "w") as f:
         json.dump(run_files, f)
 
     # Upload to GCS bucket if specified

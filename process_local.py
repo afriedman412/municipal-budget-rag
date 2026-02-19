@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
+from paths import PDF_DIR
 from pipeline.config import Config
 from pipeline.embed import EmbeddingClient, document_to_chunks
 from pipeline.chroma import ChromaClient
@@ -26,8 +27,6 @@ FILES = [
     "wa_walla_walla_19_20.pdf",
     "wa_spokane_20.pdf",
 ]
-
-PDF_DIR = Path("pdfs_2026")
 
 
 def get_parser(name: str, config):

@@ -15,7 +15,9 @@ import json
 import os
 import re
 import sys
+
 from openai import OpenAI
+from paths import TRAINING_DIR, RUNS_DIR
 
 
 DIAGNOSIS_PROMPT = """You are a municipal budget analyst. A colleague extracted "${wrong_answer}" as the total {expense} EXPENDITURE for {city}, {state} for fiscal year {year}, but the correct answer is {expected}.
@@ -53,16 +55,15 @@ def extract_numbers(text):
 
 def find_latest_run():
     """Find the most recent run JSON in the local runs/ directory."""
-    runs_dir = "runs"
-    if not os.path.isdir(runs_dir):
-        print("No runs/ directory found.")
+    if not RUNS_DIR.is_dir():
+        print(f"No {RUNS_DIR}/ directory found.")
         sys.exit(1)
-    files = sorted(f for f in os.listdir(runs_dir) if f.endswith(".json") and f != "index.json")
+    files = sorted(f for f in os.listdir(RUNS_DIR) if f.endswith(".json") and f != "index.json")
     if not files:
-        print("No run files found in runs/.")
+        print(f"No run files found in {RUNS_DIR}/.")
         sys.exit(1)
     latest = files[-1]
-    path = os.path.join(runs_dir, latest)
+    path = RUNS_DIR / latest
     print(f"Using most recent run: {path}")
     return path
 
@@ -71,7 +72,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("run_file", nargs="?", default=None,
                         help="Path to run JSON file (default: fetch latest from GCS)")
-    parser.add_argument("--cache", default="gold_chunks_cache.json",
+    parser.add_argument("--cache",
+                        default=str(TRAINING_DIR / "gold_chunks_cache.json"),
                         help="Chunks cache file")
     parser.add_argument("--llm-url", default="http://localhost:11434/v1",
                         help="LLM API base URL")

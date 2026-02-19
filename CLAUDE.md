@@ -28,8 +28,7 @@ python process_local.py pdfs_2026/tx_el_paso_20.pdf --parser aryn
 python process_local.py pdfs_2026/tx_el_paso_20.pdf --parser pymupdf
 
 # Gold set & chunk caching (run locally with ChromaDB)
-python build_gold_set.py                  # Generates gold_validation_set.json, gold_query_embeddings.json,
-                                          # gold_chunks_aryn.json, gold_chunks_pymupdf.json
+python build_gold_set.py                  # Generates training/gold_*.json files
 
 # Training data generation (run locally with PDFs + pipeline_state.db)
 python build_training_data.py             # 500 examples (default, stratified GF + Police)
@@ -37,12 +36,12 @@ python build_training_data.py --n 1000    # More examples
 
 # LLM extraction testing (run on VM with GPU)
 python test_llm_extraction.py --llm-url http://localhost:8000/v1 --model mistralai/Mistral-7B-Instruct-v0.3 --n-chunks 10
-python test_llm_extraction.py --cache gold_chunks_aryn.json   # Test specific parser
+python test_llm_extraction.py --cache training/gold_chunks_aryn.json   # Test specific parser
 python test_llm_extraction.py --city vallejo ca 2021          # Test specific city
 python test_llm_extraction.py -v                               # Show chunks sent to LLM
 
 # Fine-tuning (run on VM with GPU)
-python finetune.py --data training_data.jsonl --epochs 3      # LoRA fine-tune Mistral 7B
+python finetune.py --data training/training_data.jsonl --epochs 3  # LoRA fine-tune Mistral 7B
 vllm serve budget-mistral-lora-merged                          # Serve fine-tuned model
 
 # Environment setup
@@ -172,7 +171,7 @@ Code transfer to VM via GitHub + deploy keys.
    - Mistral 7B in 4-bit, LoRA r=16 on all attention + MLP layers
    - 3 epochs, batch 2, grad accum 4, lr 2e-4, cosine schedule
    - Saves LoRA adapter + merged 16-bit model for vLLM serving
-3. **`training_data.jsonl`** — Chat-format training data (system/user/assistant messages)
+3. **`training/training_data.jsonl`** — Chat-format training data (system/user/assistant messages)
 
 ### Key Scripts
 - `process_local.py` — Parse local PDFs → embed → index into parser-specific ChromaDB collection
@@ -187,13 +186,13 @@ Code transfer to VM via GitHub + deploy keys.
 - `test_budgets.json` — Defines the 6-city test set
 - `start_vm.sh` — Start GCP VM + launch vLLM + SSH session
 
-### Cached Data Files
-- `gold_validation_set.json` — 209 gold records (state, city, year, expense, budget_type, budget)
-- `gold_query_embeddings.json` — 3 pre-computed query embeddings (General Fund, Police, Education)
-- `gold_chunks_aryn.json` — Cached top-20 chunks per gold record from Aryn collection
-- `gold_chunks_pymupdf.json` — Cached top-20 chunks per gold record from PyMuPDF collection
-- `gold_chunks_cache.json` — Legacy combined cache (both parsers mixed)
-- `training_data.jsonl` — 456 fine-tuning examples in chat format
+### Cached Data Files (in `training/`)
+- `training/gold_validation_set.json` — 209 gold records (state, city, year, expense, budget_type, budget)
+- `training/gold_query_embeddings.json` — 3 pre-computed query embeddings (General Fund, Police, Education)
+- `training/gold_chunks_aryn.json` — Cached top-20 chunks per gold record from Aryn collection
+- `training/gold_chunks_pymupdf.json` — Cached top-20 chunks per gold record from PyMuPDF collection
+- `training/gold_chunks_cache.json` — Legacy combined cache (both parsers mixed)
+- `training/training_data.jsonl` — 456 fine-tuning examples in chat format
 
 ### Aryn API Notes
 
@@ -255,7 +254,7 @@ Code transfer to VM via GitHub + deploy keys.
 ### Next Steps
 1. **Find optimal chunk count** — testing 5/10/15 to find sweet spot (retrieval vs noise tradeoff)
 2. **Scale up training data** — more examples, especially Police wrong_scope cases
-3. **Test per-parser chunks** — run fine-tuned model on `gold_chunks_aryn.json` vs `gold_chunks_pymupdf.json`
+3. **Test per-parser chunks** — run fine-tuned model on `training/gold_chunks_aryn.json` vs `training/gold_chunks_pymupdf.json`
 4. **Improve retrieval** — 33% of records still missing from chunks (parser quality issue)
 5. **Future**: consider pdfplumber as fast+free parser with table support
 
