@@ -47,6 +47,8 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--max-seq-len", type=int, default=8192)
     parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from latest checkpoint in output dir")
     args = parser.parse_args()
 
     print(f"Loading model: {args.model}")
@@ -103,7 +105,7 @@ def main():
         ),
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume)
 
     # Save LoRA adapter
     print(f"Saving LoRA adapter to {args.output}")
