@@ -49,6 +49,10 @@ def main():
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint in output dir")
+    parser.add_argument("--wandb-project", default="muni-budget-rag",
+                        help="W&B project name")
+    parser.add_argument("--no-wandb", action="store_true",
+                        help="Disable W&B logging")
     args = parser.parse_args()
 
     print(f"Loading model: {args.model}")
@@ -83,7 +87,10 @@ def main():
     )
 
     # Train
-    print(f"Training for {args.epochs} epochs...")
+    report_to = "none" if args.no_wandb else "wandb"
+    run_name = args.output if not args.no_wandb else None
+
+    print(f"Training for {args.epochs} epochs... (W&B: {report_to})")
     trainer = SFTTrainer(
         model=model,
         tokenizer=tokenizer,
@@ -102,6 +109,8 @@ def main():
             dataset_text_field="text",
             max_seq_length=args.max_seq_len,
             packing=False,
+            report_to=report_to,
+            run_name=run_name,
         ),
     )
 

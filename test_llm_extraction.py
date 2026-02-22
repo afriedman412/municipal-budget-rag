@@ -122,8 +122,14 @@ def main():
                         help="Print chunks sent to LLM")
     parser.add_argument("--workers", "-w", type=int, default=1,
                         help="Parallel LLM requests (default: 1, try 8 for vLLM)")
+    parser.add_argument("--version",
+                        help="Model version tag (e.g. V5, V6) — stored in run JSON for dashboard")
     parser.add_argument("--gcs-bucket",
                         help="GCS bucket to upload results (e.g. muni-budget-runs)")
+    parser.add_argument("--wandb", action="store_true",
+                        help="Log results to Weights & Biases")
+    parser.add_argument("--wandb-project", default="muni-budget-rag",
+                        help="W&B project name")
     args = parser.parse_args()
 
     llm = OpenAI(base_url=args.llm_url, api_key="not-needed")
@@ -262,6 +268,16 @@ def main():
     else:
         print("No records tested.")
 
+    # Classify test set
+    cache_name = os.path.basename(args.cache)
+    has_distractors = "_d4" in cache_name or "adversarial" in cache_name
+    if "val" in cache_name or total == 60:
+        test_split = "validation"
+    elif total <= 12:
+        test_split = "test_budgets"
+    else:
+        test_split = "full"
+
     # Save structured results
     run = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -272,6 +288,9 @@ def main():
         "total": total,
         "match": exact,
         "in_chunks": in_chunks_count,
+        "version": args.version,
+        "test_split": test_split,
+        "distractors_test": has_distractors,
         "results": results,
     }
     os.makedirs(RUNS_DIR, exist_ok=True)
@@ -286,6 +305,47 @@ def main():
     run_files = sorted(f for f in os.listdir(RUNS_DIR) if f.endswith(".json") and f != "index.json")
     with open(RUNS_DIR / "index.json", "w") as f:
         json.dump(run_files, f)
+
+    # Log to W&B if specified
+    if args.wandb:
+        import wandb
+
+        cache_name = os.path.basename(args.cache)
+        run_name = f"{model_slug}_c{args.n_chunks}_{cache_name}"
+        wb_run = wandb.init(
+            project=args.wandb_project,
+            name=run_name,
+            config={
+                "model": args.model,
+                "n_chunks": args.n_chunks,
+                "cache_file": args.cache,
+                "workers": args.workers,
+                "total_records": total,
+            },
+        )
+
+        # Summary metrics
+        wandb.log({
+            "exact_match": exact,
+            "total": total,
+            "exact_match_pct": 100 * exact / total if total else 0,
+            "in_chunks": in_chunks_count,
+            "in_chunks_pct": 100 * in_chunks_count / total if total else 0,
+        })
+
+        # Per-record table
+        columns = ["state", "city", "year", "expense", "expected", "answer", "match", "in_chunks"]
+        table = wandb.Table(columns=columns)
+        for r in results:
+            table.add_data(
+                r.get("state", ""), r.get("city", ""), r.get("year", ""),
+                r.get("expense", ""), r.get("expected", ""),
+                r.get("answer", ""), r.get("match", False),
+                r.get("in_chunks", False),
+            )
+        wandb.log({"results": table})
+        wb_run.finish()
+        print(f"W&B run logged: {run_name}")
 
     # Upload to GCS bucket if specified
     if args.gcs_bucket:
