@@ -9,10 +9,12 @@
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f5; color: #333; padding: 20px; }
   h1 { margin-bottom: 20px; font-size: 1.5em; }
   h2 { margin: 20px 0 10px; font-size: 1.2em; }
-  .controls { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-  .controls label { font-weight: 600; margin-right: 8px; }
-  .controls select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; margin-right: 20px; font-size: 14px; }
-  .controls input[type="file"] { margin-right: 20px; }
+  .controls { background: #fff; padding: 16px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .controls label { font-weight: 600; margin-right: 4px; }
+  .controls select { padding: 6px 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  .controls input[type="file"] { margin-right: 12px; }
+  .swap-btn { padding: 6px 12px; background: #e5e7eb; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .swap-btn:hover { background: #d1d5db; }
   .tabs { display: flex; gap: 0; margin-bottom: 20px; }
   .tab { padding: 10px 20px; background: #fff; border: 1px solid #ddd; cursor: pointer; font-size: 0.9em; font-weight: 600; color: #666; }
   .tab:first-child { border-radius: 8px 0 0 8px; }
@@ -26,6 +28,10 @@
   .stat-card .sub { font-size: 0.85em; color: #888; margin-top: 2px; }
   .stat-card.improved .value { color: #16a34a; }
   .stat-card.regressed .value { color: #dc2626; }
+  .meta-bar { background: #fff; padding: 12px 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 16px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 0.85em; }
+  .meta-item { display: flex; gap: 4px; }
+  .meta-item .meta-label { color: #666; }
+  .meta-item .meta-value { font-weight: 600; }
   .breakdown { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
   .breakdown-card { background: #fff; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); flex: 1; min-width: 300px; }
   .breakdown-card h3 { margin-bottom: 10px; font-size: 1em; }
@@ -55,11 +61,18 @@
   .chip.wrong_fund { background: #f3e8ff; color: #6b21a8; }
   .chip.no_number { background: #f1f5f9; color: #475569; }
   .chip.no_chunks { background: #f1f5f9; color: #475569; }
+  .chip.version { background: #e0f2fe; color: #0369a1; }
+  .chip.split { background: #f0fdf4; color: #166534; }
+  .chip.distractors { background: #fef3c7; color: #92400e; }
   .empty { text-align: center; padding: 40px; color: #888; }
   .city-card { background: #fff; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
   .city-card h3 { margin-bottom: 8px; font-size: 1em; }
   .city-card table { box-shadow: none; margin-bottom: 0; }
   .mini-bar { display: inline-block; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: middle; }
+  .compare-filter { margin-bottom: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .compare-filter select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; }
+  tr.run-selected-a { background: #eff6ff; border-left: 3px solid #2563eb; }
+  tr.run-selected-b { background: #f0fdf4; border-left: 3px solid #16a34a; }
 </style>
 </head>
 <body>
@@ -81,6 +94,7 @@
 <div id="detailControls" class="controls" style="display:none;">
   <label>Run A:</label>
   <select id="runA"></select>
+  <button class="swap-btn" id="swapBtn" title="Swap Run A and Run B">&#8644;</button>
   <label>Run B (compare):</label>
   <select id="runB"><option value="">— none —</option></select>
 </div>
@@ -120,14 +134,24 @@ document.getElementById('tabBar').addEventListener('click', (e) => {
   render();
 });
 
+document.getElementById('swapBtn').addEventListener('click', () => {
+  if (!currentB) return;
+  const tmp = currentA;
+  currentA = currentB;
+  currentB = tmp;
+  document.getElementById('runA').value = currentA;
+  document.getElementById('runB').value = currentB;
+  render();
+});
+
 function updateSelectors() {
   const names = Object.keys(runs).sort();
   if (!names.length) return;
   document.getElementById('detailControls').style.display = currentTab === 'detail' ? '' : 'none';
   const selA = document.getElementById('runA');
   const selB = document.getElementById('runB');
-  selA.innerHTML = names.map(n => `<option value="${n}">${n}</option>`).join('');
-  selB.innerHTML = `<option value="">— none —</option>` + names.map(n => `<option value="${n}">${n}</option>`).join('');
+  selA.innerHTML = names.map(n => `<option value="${n}">${formatRunLabel(n)}</option>`).join('');
+  selB.innerHTML = `<option value="">— none —</option>` + names.map(n => `<option value="${n}">${formatRunLabel(n)}</option>`).join('');
 
   // Build city list from all runs
   const cities = new Set();
@@ -141,6 +165,15 @@ function updateSelectors() {
 
   if (!currentA) { currentA = names[0]; }
   render();
+}
+
+function formatRunLabel(name) {
+  const r = runs[name];
+  if (!r) return name;
+  const parts = [];
+  if (r.version) parts.push(r.version);
+  parts.push(name.length > 50 ? name.slice(0,50)+'...' : name);
+  return parts.join(' | ');
 }
 
 document.getElementById('runA').addEventListener('change', (e) => { currentA = e.target.value; render(); });
@@ -183,6 +216,30 @@ function getExpenseBreakdown(run) {
   return by;
 }
 
+function metaItem(label, value) {
+  if (value === null || value === undefined || value === '') return '';
+  return `<div class="meta-item"><span class="meta-label">${label}:</span> <span class="meta-value">${value}</span></div>`;
+}
+
+function renderRunMeta(run) {
+  let html = '<div class="meta-bar">';
+  html += metaItem('Version', run.version);
+  html += metaItem('Model', run.model ? run.model.split('/').pop() : null);
+  html += metaItem('Split', run.test_split);
+  html += metaItem('Chunks', run.n_chunks);
+  html += metaItem('Distractors (test)', run.distractors_test ? 'Yes' : 'No');
+  if (run.training) {
+    const t = run.training;
+    html += metaItem('Training examples', t.training_examples || 0);
+    html += metaItem('Training source', t.training_source);
+    html += metaItem('Distractors (train)', t.distractors_train || 0);
+    html += metaItem('Epochs', t.epochs || 0);
+    html += metaItem('Final loss', t.final_loss != null ? t.final_loss.toFixed(3) : 'N/A');
+  }
+  html += '</div>';
+  return html;
+}
+
 function render() {
   if (currentTab === 'detail') renderDetail();
   else if (currentTab === 'compare') renderCompare();
@@ -196,6 +253,13 @@ function renderDetail() {
   const b = currentB ? runs[currentB] : null;
 
   let html = '';
+
+  // Run metadata
+  html += renderRunMeta(a);
+  if (b) {
+    html += '<div style="font-size:0.8em;color:#888;margin:-8px 0 4px 0;">Compare to:</div>';
+    html += renderRunMeta(b);
+  }
 
   const ma = a.match, ta = a.total, ia = a.in_chunks;
   html += '<div class="stats">';
@@ -291,25 +355,62 @@ function renderCompare() {
   const names = Object.keys(runs).sort();
   if (!names.length) { content.innerHTML = '<div class="empty">Load runs to compare.</div>'; return; }
 
+  // Collect unique versions and splits for filters
+  const versions = [...new Set(names.map(n => runs[n].version).filter(Boolean))].sort();
+  const splits = [...new Set(names.map(n => runs[n].test_split).filter(Boolean))].sort();
+
   let html = '<h2>All Runs</h2>';
-  html += '<table><thead><tr>';
-  html += '<th>Run</th><th>Date</th><th>Model</th><th>Chunks</th><th>Match</th><th>In Chunks</th><th>Extraction Rate</th><th style="width:200px;">Match Rate</th>';
+  html += '<div style="font-size:0.82em;color:#666;margin-bottom:8px;">Click a row to set Run A. Shift-click to set Run B. Then switch to Run Detail to compare.</div>';
+
+  // Filters
+  html += '<div class="compare-filter">';
+  html += `<label>Version:</label><select id="cfVersion"><option value="">All</option>${versions.map(v => `<option>${v}</option>`).join('')}</select>`;
+  html += `<label>Split:</label><select id="cfSplit"><option value="">All</option>${splits.map(s => `<option>${s}</option>`).join('')}</select>`;
+  html += `<label>Distractors:</label><select id="cfDistractors"><option value="">All</option><option value="yes">Yes</option><option value="no">No</option></select>`;
+  html += '</div>';
+
+  // Check if any runs have enriched metadata
+  const hasEnriched = names.some(n => runs[n].version || runs[n].training);
+
+  html += '<table id="compareTable"><thead><tr>';
+  if (hasEnriched) html += '<th>Version</th>';
+  html += '<th>Run</th><th>Date</th><th>Model</th>';
+  if (hasEnriched) html += '<th>Split</th><th>Distr.</th>';
+  html += '<th>Chunks</th>';
+  if (hasEnriched) html += '<th>Train Ex.</th><th>Loss</th>';
+  html += '<th>Match</th><th>In Chunks</th><th>Extr. Rate</th><th style="width:160px;">Match Rate</th>';
   html += '</tr></thead><tbody>';
 
   for (const name of names) {
     const r = runs[name];
-    const date = r.timestamp ? new Date(r.timestamp).toLocaleString() : '\u2014';
+    const date = r.timestamp ? new Date(r.timestamp).toLocaleDateString() : '\u2014';
     const model = r.model ? r.model.split('/').pop() : '\u2014';
     const m = r.match, t = r.total, ic = r.in_chunks;
     const matchPct = pct(m, t);
     const extPct = pct(m, ic);
     const barW = Math.round(100 * m / t);
+    const version = r.version || '\u2014';
+    const split = r.test_split || '\u2014';
+    const distr = r.distractors_test ? 'Yes' : 'No';
+    const trainEx = r.training ? (r.training.training_examples || 0) : '\u2014';
+    const loss = r.training && r.training.final_loss != null ? r.training.final_loss.toFixed(3) : '\u2014';
 
-    html += '<tr>';
+    const isA = name === currentA, isB = name === currentB;
+    const rowCls = isA ? 'run-selected-a' : isB ? 'run-selected-b' : '';
+    html += `<tr class="${rowCls}" data-run="${esc(name)}" data-version="${r.version||''}" data-split="${r.test_split||''}" data-distr="${r.distractors_test?'yes':'no'}" style="cursor:pointer;">`;
+    if (hasEnriched) html += `<td><span class="chip version">${esc(version)}</span></td>`;
     html += `<td><strong>${esc(name)}</strong></td>`;
     html += `<td>${date}</td>`;
     html += `<td>${esc(model)}</td>`;
+    if (hasEnriched) {
+      html += `<td><span class="chip split">${esc(split)}</span></td>`;
+      html += `<td>${distr}</td>`;
+    }
     html += `<td>${r.n_chunks}</td>`;
+    if (hasEnriched) {
+      html += `<td>${trainEx}</td>`;
+      html += `<td>${loss}</td>`;
+    }
     html += `<td>${m}/${t} (${matchPct}%)</td>`;
     html += `<td>${ic}/${t} (${pct(ic,t)}%)</td>`;
     html += `<td>${m}/${ic} (${extPct}%)</td>`;
@@ -319,6 +420,41 @@ function renderCompare() {
 
   html += '</tbody></table>';
   content.innerHTML = html;
+
+  // Attach compare filters
+  ['cfVersion', 'cfSplit', 'cfDistractors'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', applyCompareFilters);
+  });
+
+  // Click row to set Run A (or shift-click for Run B)
+  document.querySelectorAll('#compareTable tbody tr[data-run]').forEach(tr => {
+    tr.addEventListener('click', (e) => {
+      const name = tr.dataset.run;
+      if (e.shiftKey) {
+        currentB = name;
+        document.getElementById('runB').value = name;
+      } else {
+        currentA = name;
+        document.getElementById('runA').value = name;
+      }
+      renderCompare(); // re-render to update highlights
+    });
+  });
+}
+
+function applyCompareFilters() {
+  const fVer = (document.getElementById('cfVersion') || {}).value || '';
+  const fSplit = (document.getElementById('cfSplit') || {}).value || '';
+  const fDistr = (document.getElementById('cfDistractors') || {}).value || '';
+  const rows = document.querySelectorAll('#compareTable tbody tr');
+  rows.forEach(tr => {
+    let show = true;
+    if (fVer && tr.dataset.version !== fVer) show = false;
+    if (fSplit && tr.dataset.split !== fSplit) show = false;
+    if (fDistr && tr.dataset.distr !== fDistr) show = false;
+    tr.style.display = show ? '' : 'none';
+  });
 }
 
 function renderCity() {
@@ -333,7 +469,6 @@ function renderCity() {
   if (!names.length) { content.innerHTML = '<div class="empty">Load runs first.</div>'; return; }
 
   // Collect all records for this city across all runs
-  // Group by (year, expense)
   const recordKeys = new Set();
   for (const run of Object.values(runs)) {
     for (const r of run.results) {
@@ -351,7 +486,6 @@ function renderCity() {
   for (const key of sorted) {
     const [year, expense] = key.split('|');
 
-    // Find expected value from first run that has it
     let expected = null;
     for (const run of Object.values(runs)) {
       const rec = run.results.find(r => r.city === city && r.state === state && r.year == year && r.expense === expense);
@@ -360,18 +494,18 @@ function renderCity() {
     const expStr = expected ? `$${parseInt(expected).toLocaleString()}` : '\u2014';
 
     html += `<div class="city-card"><h3>${expense} \u2014 FY ${year} <span style="font-weight:400;color:#666;">(expected: ${expStr})</span></h3>`;
-    html += '<table><thead><tr><th>Run</th><th>Chunks</th><th>Answer</th><th>Match</th><th>In Chunks</th><th>Error</th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Version</th><th>Run</th><th>Chunks</th><th>Answer</th><th>Match</th><th>In Chunks</th><th>Error</th></tr></thead><tbody>';
 
     for (const name of names) {
       const run = runs[name];
       const rec = run.results.find(r => r.city === city && r.state === state && r.year == year && r.expense === expense);
-      if (!rec) {
-        html += `<tr><td>${esc(name)}</td><td>${run.n_chunks}</td><td style="color:#888;">\u2014</td><td>\u2014</td><td>\u2014</td><td></td></tr>`;
-        continue;
-      }
+      if (!rec) continue;
+
+      const version = run.version || '\u2014';
       const ans = rec.answer ? (rec.answer.length > 50 ? rec.answer.slice(0,50)+'...' : rec.answer) : (rec.no_chunks ? 'NO CHUNKS' : '\u2014');
       const errCat = rec.match ? '' : classifyError(rec);
       html += '<tr>';
+      html += `<td><span class="chip version">${esc(version)}</span></td>`;
       html += `<td>${esc(name)}</td>`;
       html += `<td>${run.n_chunks}</td>`;
       html += `<td>${esc(ans)}</td>`;

@@ -139,18 +139,10 @@ def main():
 
     if args.city:
         city_filters = {(c.lower().replace(" ", "_"), s.lower(), int(y)) for c, s, y in args.city}
+        rows = [r for r in cache if (r["city"].lower().replace(" ", "_"), r["state"].lower(), r["year"]) in city_filters]
     elif args.limit:
         rows = cache[:args.limit]
-        city_filters = None
     else:
-        # Default: load test set from test_budgets.json
-        with open("test_budgets.json") as f:
-            test_set = json.load(f)
-        city_filters = {(t["city"].lower(), t["state"].lower(), t["year"]) for t in test_set}
-
-    if city_filters:
-        rows = [r for r in cache if (r["city"].lower().replace(" ", "_"), r["state"].lower(), r["year"]) in city_filters]
-    elif not args.limit:
         rows = cache
     print(f"Testing {len(rows)}/{len(cache)} gold records")
     print(f"LLM: {args.llm_url} model={args.model} chunks={args.n_chunks} workers={args.workers}\n")
