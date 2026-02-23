@@ -1,41 +1,37 @@
-"""PyMuPDF-based PDF text extraction."""
+"""pdfplumber-based PDF extraction with table-aware parsing."""
 
 import asyncio
-import re
 from pathlib import Path
 
-import fitz
+import pdfplumber
 
 from .config import Config
-from .parsers import ParsedDocument, parse_filename
+from .parsers import ParsedDocument, parse_filename, _pdfplumber_page_text
 
 
 def _extract_text(path: Path) -> tuple[str, list[str]]:
-    """Extract all text from a PDF using PyMuPDF.
+    """Extract all text from a PDF using pdfplumber.
 
+    Tables are detected with text-based strategy and rendered as markdown.
     Returns (combined_text, per_page_texts).
     """
-    doc = fitz.open(str(path))
-    try:
+    with pdfplumber.open(str(path)) as pdf:
         page_texts = []
-        for page in doc:
-            text = page.get_text()
-            text = re.sub(r'\n{3,}', '\n\n', text)
-            page_texts.append(text.strip())
+        for page in pdf.pages:
+            text = _pdfplumber_page_text(page)
+            page_texts.append(text)
         combined = "\n\n".join(t for t in page_texts if t)
         return combined, page_texts
-    finally:
-        doc.close()
 
 
-class PyMuPDFClient:
+class PdfPlumberClient:
     def __init__(self, config: Config):
         self.config = config
 
     async def parse(
         self, s3_key: str, local_path: Path
     ) -> ParsedDocument:
-        """Parse a PDF with PyMuPDF (runs in thread to avoid blocking)."""
+        """Parse a PDF with pdfplumber (runs in thread to avoid blocking)."""
         text, pages = await asyncio.to_thread(_extract_text, local_path)
         state, city, year = parse_filename(local_path.name)
         return ParsedDocument(

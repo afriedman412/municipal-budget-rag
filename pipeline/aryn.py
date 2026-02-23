@@ -1,8 +1,6 @@
 """Async Aryn document parsing."""
 
 import asyncio
-import re
-from dataclasses import dataclass
 from pathlib import Path
 
 from aryn_sdk.partition import (
@@ -12,49 +10,7 @@ from aryn_sdk.partition import (
 )
 
 from .config import Config
-
-
-@dataclass
-class ParsedDocument:
-    s3_key: str
-    filename: str
-    elements: list[dict]
-    text: str  # Combined text for embedding
-    # Metadata from filename
-    state: str | None
-    city: str | None
-    year: int | None
-
-
-def _parse_filename(filename: str) -> tuple[str | None, str | None, int | None]:
-    """Extract state, city, year from filename.
-
-    Format: SS_city_name_YY[_suffix].pdf
-    Example: ca_san_diego_22.pdf -> ('ca', 'san_diego', 22)
-    """
-    name = filename.lower().replace(".pdf", "")
-    parts = name.split("_")
-
-    if len(parts) < 3:
-        return None, None, None
-
-    state = parts[0] if len(parts[0]) == 2 else None
-
-    # Find year (2-digit number 16-30)
-    year = None
-    year_idx = None
-    for i, part in enumerate(parts[1:], 1):
-        if re.match(r"^\d{2}$", part):
-            y = int(part)
-            if 16 <= y <= 30:
-                year = 2000 + y
-                year_idx = i
-                break
-
-    # City is everything between state and year
-    city = "_".join(parts[1:year_idx]) if year_idx and year_idx > 1 else None
-
-    return state, city, year
+from .parsers import ParsedDocument, parse_filename
 
 
 def _table_to_markdown(el: dict) -> str | None:
@@ -260,7 +216,7 @@ class ArynClient:
     ) -> ParsedDocument:
         elements = data.get("elements", [])
         text = _elements_to_text(elements)
-        st, city, year = _parse_filename(path.name)
+        st, city, year = parse_filename(path.name)
         return ParsedDocument(
             s3_key=s3_key,
             filename=path.name,

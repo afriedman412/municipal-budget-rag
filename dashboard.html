@@ -305,7 +305,7 @@ function renderDetail() {
   html += `<select id="fExpense"><option value="">All expenses</option>${expenses.map(e => `<option>${e}</option>`).join('')}</select>`;
   html += `<select id="fMatch"><option value="">All</option><option value="ok">OK only</option><option value="miss">MISS only</option></select>`;
   html += `<select id="fInChunks"><option value="">In chunks: any</option><option value="y">Y</option><option value="n">N</option></select>`;
-  if (b) html += `<select id="fDelta"><option value="">Delta: any</option><option value="improved">Improved</option><option value="regressed">Regressed</option></select>`;
+  if (b) html += `<select id="fDelta"><option value="">Delta: any</option><option value="improved">Improved</option><option value="regressed">Regressed</option><option value="both_miss">Both MISS</option><option value="\u2014">No change</option></select>`;
   html += '</div>';
 
   html += '<table id="resultsTable"><thead><tr>';
@@ -324,14 +324,15 @@ function renderDetail() {
     const errCat = r.match ? '' : classifyError(r);
     const ansA = r.answer ? (r.answer.length > 40 ? r.answer.slice(0,40)+'...' : r.answer) : (r.no_chunks ? 'NO CHUNKS' : '\u2014');
     const expStr = `$${parseInt(r.expected).toLocaleString()}`;
-    let deltaStr = '', deltaCls = '';
+    let deltaStr = '', deltaCls = '', deltaKey = '';
     if (b && rb) {
-      if (!r.match && rb.match) { deltaStr = 'IMPROVED'; deltaCls = 'delta-improved'; }
-      else if (r.match && !rb.match) { deltaStr = 'REGRESSED'; deltaCls = 'delta-regressed'; }
-      else { deltaStr = '\u2014'; deltaCls = 'delta-same'; }
+      if (!r.match && rb.match) { deltaStr = 'IMPROVED'; deltaCls = 'delta-improved'; deltaKey = 'improved'; }
+      else if (r.match && !rb.match) { deltaStr = 'REGRESSED'; deltaCls = 'delta-regressed'; deltaKey = 'regressed'; }
+      else if (!r.match && !rb.match) { deltaStr = '\u2014'; deltaCls = 'delta-same'; deltaKey = 'both_miss'; }
+      else { deltaStr = '\u2014'; deltaCls = 'delta-same'; deltaKey = '\u2014'; }
     }
 
-    html += `<tr data-expense="${r.expense}" data-match="${r.match?'ok':'miss'}" data-in="${r.in_chunks?'y':'n'}" data-delta="${deltaStr.toLowerCase()}">`;
+    html += `<tr data-expense="${r.expense}" data-match="${r.match?'ok':'miss'}" data-in="${r.in_chunks?'y':'n'}" data-delta="${deltaKey}">`;
     html += `<td>${r.state.toUpperCase()}</td><td>${r.city}</td><td>${r.year}</td><td>${r.expense}</td>`;
     html += `<td>${esc(ansA)}</td>`;
     if (b) { const ansB = rb ? (rb.answer ? (rb.answer.length>40?rb.answer.slice(0,40)+'...':rb.answer) : '\u2014') : '\u2014'; html += `<td>${esc(ansB)}</td>`; }

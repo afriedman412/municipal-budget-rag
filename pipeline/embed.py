@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from openai import AsyncOpenAI
 
 from .config import Config
-from .aryn import ParsedDocument
+from .parsers import ParsedDocument
 
 
 @dataclass

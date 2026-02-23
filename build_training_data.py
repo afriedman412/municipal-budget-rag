@@ -27,6 +27,7 @@ import sqlite3
 import time
 
 from paths import TRAINING_DIR, PDF_DIR
+from pipeline.parsers import parse_page_text
 
 SYSTEM_PROMPT = """You are a municipal budget analyst. You will be given excerpts from a municipal budget document and asked to extract a specific expenditure amount. Follow these rules:
 - Return EXPENDITURES only — never revenue or income figures
@@ -58,17 +59,6 @@ def find_pdf(state, city, year):
         if pdf.name.startswith(f"{state}_{city}_{yr}"):
             return pdf
     return None
-
-
-def extract_page_text(pdf_path, page_num):
-    """Extract text from a single PDF page (0-indexed)."""
-    import fitz
-    doc = fitz.open(pdf_path)
-    if page_num < 0 or page_num >= len(doc):
-        return None
-    text = doc[page_num].get_text()
-    doc.close()
-    return text.strip()
 
 
 def _page_features(page):
@@ -183,7 +173,7 @@ def build_example(record, chunk_text):
     }
 
 
-def generate_pdf_examples(f, sample, args_distractors):
+def generate_pdf_examples(f, sample, args_distractors, text_parser="pymupdf"):
     """Generate training examples from PDFs. Writes to file handle f."""
     count = 0
     skipped = 0
@@ -194,7 +184,7 @@ def generate_pdf_examples(f, sample, args_distractors):
         try:
             target_page = record["pdf_page"] - 1  # Convert to 0-indexed
 
-            target_text = extract_page_text(pdf_path, target_page)
+            target_text = parse_page_text(pdf_path, target_page, parser=text_parser)
             if not target_text:
                 skipped += 1
                 continue
@@ -203,7 +193,7 @@ def generate_pdf_examples(f, sample, args_distractors):
 
             distractor_texts = []
             for dp in distractor_pages:
-                text = extract_page_text(pdf_path, dp)
+                text = parse_page_text(pdf_path, dp, parser=text_parser)
                 if text:
                     distractor_texts.append(text)
 
@@ -283,6 +273,8 @@ def main():
                         help="Cached chunks file(s) to generate examples from (can repeat)")
     parser.add_argument("--chunks-only", type=str, action="append", default=[],
                         help="Like --chunks-cache but skips PDF-based examples entirely")
+    parser.add_argument("--parser", choices=["pymupdf", "pdfplumber", "aryn"], default="pymupdf",
+                        help="PDF text extraction parser (default: pymupdf)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
     parser.add_argument("--output", default=str(TRAINING_DIR / "training_data.jsonl"),
@@ -333,7 +325,7 @@ def main():
 
             random.shuffle(sample)
 
-            count, skipped, errors = generate_pdf_examples(f, sample, args.distractors)
+            count, skipped, errors = generate_pdf_examples(f, sample, args.distractors, text_parser=args.parser)
             total_count += count
             print(f"  PDF: {count} examples ({skipped} skipped, {errors} errors)")
 

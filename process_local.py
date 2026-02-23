@@ -11,6 +11,7 @@ load_dotenv()
 
 from paths import PDF_DIR
 from pipeline.config import Config
+from pipeline.parsers import get_parser
 from pipeline.embed import EmbeddingClient, document_to_chunks
 from pipeline.chroma import ChromaClient
 
@@ -29,21 +30,9 @@ FILES = [
 ]
 
 
-def get_parser(name: str, config):
-    """Get a parser client by name."""
-    if name == "aryn":
-        from pipeline.aryn import ArynClient
-        return ArynClient(config)
-    elif name == "pymupdf":
-        from pipeline.pymupdf import PyMuPDFClient
-        return PyMuPDFClient(config)
-    else:
-        raise ValueError(f"Unknown parser: {name}. Use 'aryn' or 'pymupdf'.")
-
-
 async def main():
     ap = argparse.ArgumentParser(description="Process local PDFs")
-    ap.add_argument("--parser", choices=["aryn", "pymupdf"], default="aryn",
+    ap.add_argument("--parser", choices=["aryn", "pymupdf", "pdfplumber"], default="aryn",
                     help="PDF parser to use (default: aryn)")
     ap.add_argument("files", nargs="*", help="PDF filenames (default: FILES list)")
     args = ap.parse_args()
