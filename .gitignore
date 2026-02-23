@@ -21,8 +21,7 @@ chroma_data/
 pdfs/
 pdfs_2026/
 
-# Training data & gold sets (large, local-only)
-training/
+# Misc data files
 page_features_cache.json
 *.csv
 matched_pdfs.txt
