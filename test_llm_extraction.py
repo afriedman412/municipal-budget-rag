@@ -89,7 +89,7 @@ Budget document excerpts:
 ADOPTED {expense} expenditure for FY {year}:"""
 
 
-def call_llm(llm, model, system, prompt):
+def call_llm(llm, model, system, prompt, temperature=0):
     """Make a single LLM call. Returns the answer string."""
     response = llm.chat.completions.create(
         model=model,
@@ -97,10 +97,49 @@ def call_llm(llm, model, system, prompt):
             {"role": "system", "content": system},
             {"role": "user", "content": prompt},
         ],
-        temperature=0,
+        temperature=temperature,
         max_tokens=50,
     )
     return response.choices[0].message.content.strip()
+
+
+def call_llm_multi(llm, model, system, prompt, n_samples):
+    """Run N samples at temp=0.3, return majority-vote answer + agreement info."""
+    answers = []
+    for _ in range(n_samples):
+        ans = call_llm(llm, model, system, prompt, temperature=0.3)
+        answers.append(ans)
+
+    # Majority vote by extracted number (not raw string)
+    from collections import Counter
+    num_votes = Counter()
+    for ans in answers:
+        nums = extract_numbers(ans)
+        # Use the first number as the "vote" (model outputs are typically just one number)
+        if nums:
+            num_votes[min(nums)] = num_votes.get(min(nums), 0) + 1
+
+    if num_votes:
+        winner = num_votes.most_common(1)[0][0]
+        # Return the raw answer string that produced the winning number
+        for ans in answers:
+            if winner in extract_numbers(ans):
+                best_answer = ans
+                break
+        else:
+            best_answer = answers[0]
+    else:
+        best_answer = answers[0]
+
+    n_unique = len(set(frozenset(extract_numbers(a)) for a in answers))
+    agreement = num_votes.most_common(1)[0][1] / n_samples if num_votes else 0
+
+    return best_answer, {
+        "samples": n_samples,
+        "all_answers": answers,
+        "n_unique": n_unique,
+        "agreement": round(agreement, 2),
+    }
 
 
 def main():
@@ -126,6 +165,8 @@ def main():
                         help="Model version tag (e.g. V5, V6) — stored in run JSON for dashboard")
     parser.add_argument("--gcs-bucket",
                         help="GCS bucket to upload results (e.g. muni-budget-runs)")
+    parser.add_argument("--samples", type=int, default=1,
+                        help="Run each record N times at temp=0.3, majority vote (default: 1 = deterministic)")
     parser.add_argument("--wandb", action="store_true",
                         help="Log results to Weights & Biases")
     parser.add_argument("--wandb-project", default="muni-budget-rag",
@@ -145,7 +186,8 @@ def main():
     else:
         rows = cache
     print(f"Testing {len(rows)}/{len(cache)} gold records")
-    print(f"LLM: {args.llm_url} model={args.model} chunks={args.n_chunks} workers={args.workers}\n")
+    samples_info = f" samples={args.samples}" if args.samples > 1 else ""
+    print(f"LLM: {args.llm_url} model={args.model} chunks={args.n_chunks} workers={args.workers}{samples_info}\n")
 
     # Phase 1: Prepare all tasks
     tasks = []  # (index, row_data, prompt_or_None)
@@ -204,7 +246,7 @@ def main():
 
     CLOSE_THRESHOLD = 0.05  # 5% relative error
 
-    def process_result(idx, answer):
+    def process_result(idx, answer, sample_info=None):
         """Score a result and print it. Returns the result dict."""
         nonlocal exact, close, total, in_chunks_count
         data = task_map[idx]
@@ -237,10 +279,18 @@ def main():
         in_flag = "Y" if data["in_chunks"] else "N"
 
         answer_display = answer[:40] + "..." if len(answer) > 40 else answer
-        print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer_display:<45} {expected_str:<20} {in_flag:<5} {flag}")
+        agree_str = ""
+        if sample_info:
+            agree_str = f"  [{sample_info['agreement']:.0%} agree, {sample_info['n_unique']} unique]"
+        print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer_display:<45} {expected_str:<20} {in_flag:<5} {flag}{agree_str}")
 
-        return {**data, "answer": answer, "match": match,
-                "close_match": close_match, "pct_error": round(pct_error, 4) if pct_error is not None else None}
+        result = {**data, "answer": answer, "match": match,
+                  "close_match": close_match, "pct_error": round(pct_error, 4) if pct_error is not None else None}
+        if sample_info:
+            result["agreement"] = sample_info["agreement"]
+            result["n_unique"] = sample_info["n_unique"]
+            result["all_answers"] = sample_info["all_answers"]
+        return result
 
     # Print no-chunks rows first
     for idx, data, prompt in tasks:
@@ -252,23 +302,33 @@ def main():
             total += 1
 
     # Run LLM calls
+    use_multi = args.samples > 1
+
+    def run_one(idx, prompt):
+        if use_multi:
+            answer, sample_info = call_llm_multi(llm, args.model, SYSTEM_PROMPT, prompt, args.samples)
+            return idx, answer, sample_info
+        else:
+            answer = call_llm(llm, args.model, SYSTEM_PROMPT, prompt)
+            return idx, answer, None
+
     if args.workers > 1 and llm_tasks:
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures = {
-                executor.submit(call_llm, llm, args.model, SYSTEM_PROMPT, prompt): idx
+                executor.submit(run_one, idx, prompt): idx
                 for idx, _, prompt in llm_tasks
             }
             for future in as_completed(futures):
-                idx = futures[future]
                 try:
-                    answer = future.result()
+                    idx, answer, sample_info = future.result()
                 except Exception as e:
-                    answer = f"ERROR: {e}"
-                results.append(process_result(idx, answer))
+                    idx = futures[future]
+                    answer, sample_info = f"ERROR: {e}", None
+                results.append(process_result(idx, answer, sample_info))
     else:
         for idx, data, prompt in llm_tasks:
-            answer = call_llm(llm, args.model, SYSTEM_PROMPT, prompt)
-            results.append(process_result(idx, answer))
+            idx, answer, sample_info = run_one(idx, prompt)
+            results.append(process_result(idx, answer, sample_info))
 
     print("-" * 125)
     if total:
@@ -301,6 +361,7 @@ def main():
         "version": args.version,
         "test_split": test_split,
         "distractors_test": has_distractors,
+        "samples": args.samples,
         "results": results,
     }
     os.makedirs(RUNS_DIR, exist_ok=True)

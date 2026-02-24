@@ -47,6 +47,12 @@ def main():
     parser.add_argument("--grad-accum", type=int, default=4)
     parser.add_argument("--max-seq-len", type=int, default=8192)
     parser.add_argument("--lora-r", type=int, default=16)
+    parser.add_argument("--lora-alpha", type=int, default=None,
+                        help="LoRA alpha (default: 2 * lora_r)")
+    parser.add_argument("--warmup", type=float, default=0.05,
+                        help="Warmup ratio (default: 0.05)")
+    parser.add_argument("--packing", action="store_true",
+                        help="Pack multiple short examples into one sequence")
     parser.add_argument("--resume", action="store_true",
                         help="Resume from latest checkpoint in output dir")
     parser.add_argument("--wandb-project", default="muni-budget-rag",
@@ -69,7 +75,7 @@ def main():
         r=args.lora_r,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                         "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=args.lora_r,
+        lora_alpha=args.lora_alpha or args.lora_r * 2,
         lora_dropout=0,
         bias="none",
         use_gradient_checkpointing="unsloth",
@@ -104,11 +110,11 @@ def main():
             bf16=True,
             logging_steps=10,
             save_strategy="epoch",
-            warmup_ratio=0.05,
+            warmup_ratio=args.warmup,
             lr_scheduler_type="cosine",
             dataset_text_field="text",
             max_seq_length=args.max_seq_len,
-            packing=False,
+            packing=args.packing,
             report_to=report_to,
             run_name=run_name,
         ),

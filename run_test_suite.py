@@ -58,10 +58,15 @@ def main():
     p.add_argument("--version", required=True, help="Version prefix (e.g. v6)")
     p.add_argument("--llm-url", default="http://localhost:8000/v1")
     p.add_argument("--workers", "-w", type=int, default=1)
+    p.add_argument("--samples", type=int, default=1, help="Run each record N times (majority vote)")
     p.add_argument("--wandb", action="store_true", help="Pass --wandb to test script")
     args = p.parse_args()
 
-    extra = ["--wandb"] if args.wandb else []
+    extra = []
+    if args.wandb:
+        extra += ["--wandb"]
+    if args.samples > 1:
+        extra += ["--samples", str(args.samples)]
     results = []
 
     for parser, condition, cache in SUITES:
