@@ -90,29 +90,62 @@
   - Full adversarial (1,438 records): **1,146/1,438 (80%)**
 - **Takeaway**: More data is the biggest lever. Val clean 67% → 73%, val adversarial 63% → 73%. Distractors no longer hurt on held-out data (73% both ways) — the model generalized to handle noise without distractor training. Overfitting gap similar (92% full vs 73% val) but absolute scores up across the board.
 
+## V6 (5 epochs) — Distractor training (2 per example)
+- **Date**: 2026-02-23
+- **Model**: budget-mistral-lora-v6-merged (LoRA on Mistral 7B)
+- **Training**:
+  - 1,378 examples (689 cities x 2 expenses, PyMuPDF pages only)
+  - 2 random distractor pages per example (~7,695 avg chars/prompt)
+  - 5 epochs, lr=2e-4, batch=2, grad_accum=4, max_seq_len=8192
+  - Train/val split: 689 train / 30 validation (same 30 val cities as V3-V5)
+  - Loss at epoch 5: ~0.603 (still falling)
+- **Inference params**: n-chunks=1 or 5, max_tokens=50, temperature=0
+- **Results** (val only, 60 records, 3 parsers x clean/d4):
+  - Aryn clean: **52/60 (87%)**, Aryn d4: **48/60 (80%)**
+  - PyMuPDF clean: **50/60 (83%)**, PyMuPDF d4: **44/60 (73%)**
+  - pdfplumber clean: **41/60 (68%)**, pdfplumber d4: **36/60 (60%)**
+- **V5 → V6 comparison**:
+  - Aryn: 88→87% clean (-1), 78→80% d4 (+2) — flat
+  - PyMuPDF: 78→83% clean (+5), 65→73% d4 (+8) — big improvement
+  - pdfplumber: 70→68% clean (-2), 62→60% d4 (-2) — slightly worse
+- **Takeaway**: Distractor training helps the parser it was trained on (pymupdf). PyMuPDF d4 gap narrowed from 15% to 10%. Aryn slightly improved on d4. pdfplumber slightly regressed. Loss still falling at epoch 5 — continuing to 10 epochs.
+
+## V6 (10 epochs) — *training in progress*
+
 ---
 
 ## Controlled variables to track per run
-| Variable | V1 | V2 | V3 | V4 | V5 |
-|---|---|---|---|---|---|
-| Base model | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 |
-| Fine-tuned | no | yes | yes | yes | yes |
-| Training examples | - | 517 | 206 | 206 | 1,378 |
-| Training source | - | mixed (PyMuPDF + Aryn) | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only |
-| Distractors (train) | - | 4 per example | 0 | 4 random pages | 0 |
-| Epochs | - | 3 | 10 | 10 (crashed) | 5 (resumed from 2) |
-| Final loss | - | 0.985 | ~0.34 | ~0.6 (messy) | ~0.70 (epoch 2.3) |
-| n-chunks (test) | 20 | 5 | 1 (target page) | 1 or 5 | 1 or 5 |
-| max_tokens | none | 50 | 50 | 50 | 50 |
-| Test records | 108 | 108 | 60 (val) + 266 (full) | 60 (val only) | 60 (val) + 1,438 (full) |
-| Val clean | - | - | 67% | 67% | **73%** |
-| Val adversarial | - | - | 63% | 57% | **73%** |
-| Full clean | - | - | 85% | - | 92% |
-| Full adversarial | - | - | 67% | - | 80% |
+| Variable | V1 | V2 | V3 | V4 | V5 | V6 (5ep) |
+|---|---|---|---|---|---|---|
+| Base model | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 |
+| Fine-tuned | no | yes | yes | yes | yes | yes |
+| Training examples | - | 517 | 206 | 206 | 1,378 | 1,378 |
+| Training source | - | mixed (PyMuPDF + Aryn) | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only |
+| Distractors (train) | - | 4 per example | 0 | 4 random pages | 0 | 2 random pages |
+| Epochs | - | 3 | 10 | 10 (crashed) | 5 (resumed from 2) | 5 |
+| Final loss | - | 0.985 | ~0.34 | ~0.6 (messy) | ~0.70 (epoch 2.3) | ~0.603 |
+| n-chunks (test) | 20 | 5 | 1 (target page) | 1 or 5 | 1 or 5 | 1 or 5 |
+| max_tokens | none | 50 | 50 | 50 | 50 | 50 |
+| Test records | 108 | 108 | 60 (val) + 266 (full) | 60 (val only) | 60 (val) + 1,438 (full) | 60 (val, 3 parsers) |
+| Val clean (pymupdf) | - | - | 67% | 67% | 73% | **83%** |
+| Val adversarial (pymupdf) | - | - | 63% | 57% | 73% | **73%** |
+| Full clean | - | - | 85% | - | 92% | - |
+| Full adversarial | - | - | 67% | - | 80% | - |
+
+## Error analysis (V5, 60 val records, all 6 parser/distractor combos)
+Spot-checked all 78 misses across 6 runs. Categories:
+1. **Wrong scope (~30)**: total vs GF, all-funds vs GF, with/without transfers, revenue vs expenditure
+2. **Wrong year/column (~17)**: pulling different FY from multi-year tables, especially with distractors
+3. **Proposed vs adopted (~8)**: recommended/proposed instead of council-adopted
+4. **Way off / wrong page (~8)**: completely wrong number (school budget, public works line item, etc.)
+5. **Parser misread (~7)**: small digit errors from OCR (misread 7→5, 721→700, lost leading 1)
+6. **Ambiguous gold truth (~8+)**: genuinely unclear which number is correct (transfers, operating vs total)
 
 ## Key takeaways so far
-1. **Fine-tuning works**: 49% → 67% → 73% on held-out clean data (base → V3 → V5)
+1. **Fine-tuning works**: 49% → 67% → 73% → 83% on held-out pymupdf clean data (base → V3 → V5 → V6)
 2. **More data is the biggest lever**: 206 → 1,378 examples gave +6% val clean, +10% val adversarial
-3. **Distractors no longer hurt**: V5 scores 73% on both clean and adversarial val (without distractor training)
-4. **Overfitting still present**: 92% full vs 73% val — but less relative to V3 (18% gap vs 19%)
-5. **Next levers**: error analysis on the 16 val misses, try more epochs, consider distractor training with clean run
+3. **Distractor training helps robustness**: V6 pymupdf d4 65→73% (+8pp), clean 78→83% (+5pp)
+4. **Aryn is the best parser**: 87% clean / 80% d4 — consistently outperforms pymupdf and pdfplumber
+5. **Wrong scope is the #1 error**: model finds a related number at wrong aggregation level (total vs GF, with/without transfers)
+6. **Many "misses" are debatable**: ambiguous gold truth (should transfers be included? operating vs final total?)
+7. **Next**: test V6 at 10 epochs, consider full-set evaluation

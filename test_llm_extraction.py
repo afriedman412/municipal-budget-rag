@@ -197,13 +197,16 @@ def main():
     print("-" * 125)
 
     exact = 0
+    close = 0
     total = 0
     in_chunks_count = 0
     results = []
 
+    CLOSE_THRESHOLD = 0.05  # 5% relative error
+
     def process_result(idx, answer):
         """Score a result and print it. Returns the result dict."""
-        nonlocal exact, total, in_chunks_count
+        nonlocal exact, close, total, in_chunks_count
         data = task_map[idx]
         state, city, year = data["state"], data["city"], data["year"]
         expense, expected = data["expense"], data["expected"]
@@ -215,16 +218,29 @@ def main():
         expected_str = f"${expected:,.0f}"
         answer_nums = extract_numbers(answer)
         match = expected_int in answer_nums
+
+        # Compute pct_error from closest extracted number
+        close_match = False
+        pct_error = None
+        if answer_nums and expected_int > 0:
+            closest = min(answer_nums, key=lambda n: abs(n - expected_int))
+            pct_error = abs(closest - expected_int) / expected_int
+            if not match and pct_error <= CLOSE_THRESHOLD:
+                close_match = True
+
         if match:
             exact += 1
+        elif close_match:
+            close += 1
         total += 1
-        flag = "OK" if match else "MISS"
+        flag = "OK" if match else ("CLOSE" if close_match else "MISS")
         in_flag = "Y" if data["in_chunks"] else "N"
 
         answer_display = answer[:40] + "..." if len(answer) > 40 else answer
         print(f"{state.upper():<6} {city:<20} {year:<6} {expense:<15} {answer_display:<45} {expected_str:<20} {in_flag:<5} {flag}")
 
-        return {**data, "answer": answer, "match": match}
+        return {**data, "answer": answer, "match": match,
+                "close_match": close_match, "pct_error": round(pct_error, 4) if pct_error is not None else None}
 
     # Print no-chunks rows first
     for idx, data, prompt in tasks:
@@ -256,7 +272,8 @@ def main():
 
     print("-" * 125)
     if total:
-        print(f"Match: {exact}/{total} ({100*exact/total:.0f}%)  |  Answer in chunks: {in_chunks_count}/{total}")
+        miss = total - exact - close
+        print(f"Match: {exact}/{total} ({100*exact/total:.0f}%)  |  Close: {close}  |  Miss: {miss}  |  In chunks: {in_chunks_count}/{total}")
     else:
         print("No records tested.")
 
@@ -279,6 +296,7 @@ def main():
         "workers": args.workers,
         "total": total,
         "match": exact,
+        "close": close,
         "in_chunks": in_chunks_count,
         "version": args.version,
         "test_split": test_split,
@@ -319,20 +337,23 @@ def main():
         # Summary metrics
         wandb.log({
             "exact_match": exact,
+            "close_match": close,
             "total": total,
             "exact_match_pct": 100 * exact / total if total else 0,
+            "acceptable_pct": 100 * (exact + close) / total if total else 0,
             "in_chunks": in_chunks_count,
             "in_chunks_pct": 100 * in_chunks_count / total if total else 0,
         })
 
         # Per-record table
-        columns = ["state", "city", "year", "expense", "expected", "answer", "match", "in_chunks"]
+        columns = ["state", "city", "year", "expense", "expected", "answer", "match", "close_match", "pct_error", "in_chunks"]
         table = wandb.Table(columns=columns)
         for r in results:
             table.add_data(
                 r.get("state", ""), r.get("city", ""), r.get("year", ""),
                 r.get("expense", ""), r.get("expected", ""),
                 r.get("answer", ""), r.get("match", False),
+                r.get("close_match", False), r.get("pct_error"),
                 r.get("in_chunks", False),
             )
         wandb.log({"results": table})
