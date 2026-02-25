@@ -8,7 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from paths import PDF_DIR
+from config import PDF_DIR, PARSER_TEST_PDFS
 from pipeline.config import Config
 from pipeline.parsers import get_parser
 from pipeline.embed import EmbeddingClient, document_to_chunks
@@ -21,19 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Batch 3b: 3 more text-heavy PDFs to hit 50 total
-FILES = [
-    "ny_peekskill_19.pdf",
-    "wa_walla_walla_19_20.pdf",
-    "wa_spokane_20.pdf",
-]
-
-
 async def main():
     ap = argparse.ArgumentParser(description="Process local PDFs")
     ap.add_argument("--parser", choices=["aryn", "pymupdf", "pdfplumber", "llamaparse", "unstructured"], default="aryn",
                     help="PDF parser to use (default: aryn)")
-    ap.add_argument("files", nargs="*", help="PDF filenames (default: FILES list)")
+    ap.add_argument("files", nargs="*", help="PDF filenames (default: PARSER_TEST_PDFS from config.py)")
     args = ap.parse_args()
 
     config = Config.from_env()
@@ -44,12 +36,14 @@ async def main():
     embedder = EmbeddingClient(config)
     chroma = ChromaClient(config)
 
-    file_list = args.files if args.files else FILES
+    file_list = args.files if args.files else PARSER_TEST_PDFS
 
     # Build list of (s3_key, local_path)
     items = []
     for f in file_list:
-        path = PDF_DIR / f if not Path(f).is_absolute() else Path(f)
+        path = Path(f)
+        if not path.exists():
+            path = PDF_DIR / f
         if not path.exists():
             logger.error(f"Missing: {path}")
             continue

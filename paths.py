@@ -1,7 +1,3 @@
-"""Shared path constants for the project."""
+"""Re-export path constants from config.py for backwards compatibility."""
 
-from pathlib import Path
-
-TRAINING_DIR = Path("training")
-PDF_DIR = Path("pdfs_2026")
-RUNS_DIR = Path("runs")
+from config import PDF_DIR, TRAINING_DIR, RUNS_DIR  # noqa: F401

@@ -1,7 +1,7 @@
 """Unstructured API-based PDF parsing.
 
 Requires: pip install unstructured-client
-Env var: UNSTRUCTURED_API_KEY
+Env var: UNSTRUCTURED_KEY
 """
 
 import asyncio
@@ -18,27 +18,34 @@ def _parse_pdf(path: Path) -> tuple[str, list[str]]:
     Returns (combined_text, per_page_texts).
     """
     from unstructured_client import UnstructuredClient
-    from unstructured_client.models import shared
+    from unstructured_client.models import operations, shared
 
     client = UnstructuredClient(
-        api_key_auth=os.environ["UNSTRUCTURED_API_KEY"],
+        api_key_auth=os.environ["UNSTRUCTURED_KEY"],
     )
     with open(path, "rb") as f:
-        response = client.general.partition(
-            request=shared.PartitionParameters(
+        req = operations.PartitionRequest(
+            partition_parameters=shared.PartitionParameters(
                 files=shared.Files(
                     content=f.read(),
                     file_name=path.name,
                 ),
                 strategy="hi_res",
+                split_pdf_page=True,
+                split_pdf_allow_failed=True,
             )
         )
+        response = client.general.partition(request=req)
 
-    # Group elements by page
+    # Group elements by page (SDK returns dicts or objects depending on version)
     page_map: dict[int, list[str]] = {}
     for el in response.elements:
-        pg = el.metadata.page_number or 1
-        text = el.text or ""
+        if isinstance(el, dict):
+            pg = el.get("metadata", {}).get("page_number") or 1
+            text = el.get("text") or ""
+        else:
+            pg = el.metadata.page_number or 1
+            text = el.text or ""
         if text.strip():
             page_map.setdefault(pg, []).append(text)
 
@@ -58,8 +65,8 @@ def _parse_pdf(path: Path) -> tuple[str, list[str]]:
 class UnstructuredClient_:
     def __init__(self, config: Config):
         self.config = config
-        if not os.environ.get("UNSTRUCTURED_API_KEY"):
-            raise ValueError("UNSTRUCTURED_API_KEY environment variable required")
+        if not os.environ.get("UNSTRUCTURED_KEY"):
+            raise ValueError("UNSTRUCTURED_KEY environment variable required")
 
     async def parse(
         self, s3_key: str, local_path: Path

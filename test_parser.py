@@ -13,7 +13,7 @@ Usage:
   python test_parser.py --parser marker pdfs_2026/ --pages 50  # only first 50 pages
 
 Env vars for API parsers:
-  REDUCTO_API_KEY, LLAMA_CLOUD_API_KEY, UNSTRUCTURED_API_KEY, DOCSUMO_API_KEY
+  REDUCTO_API_KEY, LLAMA_CLOUD_API_KEY, UNSTRUCTURED_KEY, DOCSUMO_API_KEY
 """
 
 import argparse
@@ -97,7 +97,7 @@ def parse_unstructured(pdf_path, max_pages=None):
     from unstructured_client.models import shared
 
     client = UnstructuredClient(
-        api_key_auth=os.environ["UNSTRUCTURED_API_KEY"],
+        api_key_auth=os.environ["UNSTRUCTURED_KEY"],
     )
     with open(pdf_path, "rb") as f:
         response = client.general.partition(
