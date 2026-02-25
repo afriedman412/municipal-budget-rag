@@ -61,6 +61,10 @@
   .chip.wrong_fund { background: #f3e8ff; color: #6b21a8; }
   .chip.no_number { background: #f1f5f9; color: #475569; }
   .chip.no_chunks { background: #f1f5f9; color: #475569; }
+  .chip.agree-high { background: #dcfce7; color: #166534; }
+  .chip.agree-mid { background: #fef9c3; color: #854d0e; }
+  .chip.agree-low { background: #fee2e2; color: #991b1b; }
+  .close-match { color: #d97706; font-weight: 600; }
   .chip.version { background: #e0f2fe; color: #0369a1; }
   .chip.split { background: #f0fdf4; color: #166534; }
   .chip.distractors { background: #fef3c7; color: #92400e; }
@@ -303,15 +307,17 @@ function renderDetail() {
   html += '<div class="filter-row"><label>Filter:</label>';
   const expenses = [...new Set(a.results.map(r => r.expense))].sort();
   html += `<select id="fExpense"><option value="">All expenses</option>${expenses.map(e => `<option>${e}</option>`).join('')}</select>`;
-  html += `<select id="fMatch"><option value="">All</option><option value="ok">OK only</option><option value="miss">MISS only</option></select>`;
+  html += `<select id="fMatch"><option value="">All</option><option value="ok">OK only</option><option value="close">CLOSE only</option><option value="miss">MISS only</option></select>`;
   html += `<select id="fInChunks"><option value="">In chunks: any</option><option value="y">Y</option><option value="n">N</option></select>`;
   if (b) html += `<select id="fDelta"><option value="">Delta: any</option><option value="improved">Improved</option><option value="regressed">Regressed</option><option value="both_miss">Both MISS</option><option value="\u2014">No change</option></select>`;
   html += '</div>';
 
+  const hasSamples = a.samples > 1;
   html += '<table id="resultsTable"><thead><tr>';
   html += '<th>State</th><th>City</th><th>Year</th><th>Expense</th><th>Answer (A)</th>';
   if (b) html += '<th>Answer (B)</th>';
   html += '<th>Expected</th><th>In?</th><th>Match</th>';
+  if (hasSamples) html += '<th>Agree</th>';
   if (b) html += '<th>Delta</th>';
   html += '<th>Error</th></tr></thead><tbody>';
 
@@ -332,13 +338,24 @@ function renderDetail() {
       else { deltaStr = '\u2014'; deltaCls = 'delta-same'; deltaKey = '\u2014'; }
     }
 
-    html += `<tr data-expense="${r.expense}" data-match="${r.match?'ok':'miss'}" data-in="${r.in_chunks?'y':'n'}" data-delta="${deltaKey}">`;
+    const matchKey = r.match ? 'ok' : (r.close_match ? 'close' : 'miss');
+    html += `<tr data-expense="${r.expense}" data-match="${matchKey}" data-in="${r.in_chunks?'y':'n'}" data-delta="${deltaKey}">`;
     html += `<td>${r.state.toUpperCase()}</td><td>${r.city}</td><td>${r.year}</td><td>${r.expense}</td>`;
     html += `<td>${esc(ansA)}</td>`;
     if (b) { const ansB = rb ? (rb.answer ? (rb.answer.length>40?rb.answer.slice(0,40)+'...':rb.answer) : '\u2014') : '\u2014'; html += `<td>${esc(ansB)}</td>`; }
     html += `<td>${expStr}</td>`;
     html += `<td>${r.in_chunks ? 'Y' : 'N'}</td>`;
-    html += `<td class="${r.match ? 'ok' : 'miss'}">${r.match ? 'OK' : 'MISS'}</td>`;
+    const matchLabel = r.match ? 'OK' : (r.close_match ? 'CLOSE' : 'MISS');
+    const matchCls = r.match ? 'ok' : (r.close_match ? 'close-match' : 'miss');
+    html += `<td class="${matchCls}">${matchLabel}</td>`;
+    if (hasSamples && r.agreement != null) {
+      const agPct = Math.round(r.agreement * 100);
+      const agCls = agPct >= 80 ? 'agree-high' : agPct >= 60 ? 'agree-mid' : 'agree-low';
+      const tooltip = r.n_unique ? `${r.n_unique} unique answer(s)` : '';
+      html += `<td><span class="chip ${agCls}" title="${tooltip}">${agPct}%</span></td>`;
+    } else if (hasSamples) {
+      html += '<td>\u2014</td>';
+    }
     if (b) html += `<td class="${deltaCls}">${deltaStr}</td>`;
     html += `<td>${errCat ? `<span class="chip ${errCat}">${errCat}</span>` : ''}</td>`;
     html += '</tr>';
@@ -495,7 +512,7 @@ function renderCity() {
     const expStr = expected ? `$${parseInt(expected).toLocaleString()}` : '\u2014';
 
     html += `<div class="city-card"><h3>${expense} \u2014 FY ${year} <span style="font-weight:400;color:#666;">(expected: ${expStr})</span></h3>`;
-    html += '<table><thead><tr><th>Version</th><th>Run</th><th>Chunks</th><th>Answer</th><th>Match</th><th>In Chunks</th><th>Error</th></tr></thead><tbody>';
+    html += '<table><thead><tr><th>Version</th><th>Run</th><th>Chunks</th><th>Answer</th><th>Match</th><th>Agree</th><th>In Chunks</th><th>Error</th></tr></thead><tbody>';
 
     for (const name of names) {
       const run = runs[name];
@@ -505,12 +522,21 @@ function renderCity() {
       const version = run.version || '\u2014';
       const ans = rec.answer ? (rec.answer.length > 50 ? rec.answer.slice(0,50)+'...' : rec.answer) : (rec.no_chunks ? 'NO CHUNKS' : '\u2014');
       const errCat = rec.match ? '' : classifyError(rec);
+      const mLabel = rec.match ? 'OK' : (rec.close_match ? 'CLOSE' : 'MISS');
+      const mCls = rec.match ? 'ok' : (rec.close_match ? 'close-match' : 'miss');
+      let agreeHtml = '\u2014';
+      if (rec.agreement != null) {
+        const agPct = Math.round(rec.agreement * 100);
+        const agCls = agPct >= 80 ? 'agree-high' : agPct >= 60 ? 'agree-mid' : 'agree-low';
+        agreeHtml = `<span class="chip ${agCls}">${agPct}%</span>`;
+      }
       html += '<tr>';
       html += `<td><span class="chip version">${esc(version)}</span></td>`;
       html += `<td>${esc(name)}</td>`;
       html += `<td>${run.n_chunks}</td>`;
       html += `<td>${esc(ans)}</td>`;
-      html += `<td class="${rec.match ? 'ok' : 'miss'}">${rec.match ? 'OK' : 'MISS'}</td>`;
+      html += `<td class="${mCls}">${mLabel}</td>`;
+      html += `<td>${agreeHtml}</td>`;
       html += `<td>${rec.in_chunks ? 'Y' : 'N'}</td>`;
       html += `<td>${errCat ? `<span class="chip ${errCat}">${errCat}</span>` : ''}</td>`;
       html += '</tr>';

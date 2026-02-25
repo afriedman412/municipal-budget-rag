@@ -1,0 +1,38 @@
+[
+  {
+    "state": "AZ", "city": "Flagstaff", "year": 2019,
+    "expense": "Police", "expected": 23046315,
+    "category": "always_correct",
+    "pdf": "az_flagstaff_19.pdf"
+  },
+  {
+    "state": "TX", "city": "Pflugerville", "year": 2020,
+    "expense": "General Fund", "expected": 42201781,
+    "category": "always_correct",
+    "pdf": "tx_pflugerville_20.pdf"
+  },
+  {
+    "state": "CA", "city": "San Rafael", "year": 2018,
+    "expense": "General Fund", "expected": 74863946,
+    "category": "close",
+    "pdf": "ca_san_rafael_18.pdf"
+  },
+  {
+    "state": "OH", "city": "Cincinnati", "year": 2024,
+    "expense": "General Fund", "expected": 504080750,
+    "category": "close",
+    "pdf": "oh_cincinnati_24_25_bi.pdf"
+  },
+  {
+    "state": "OR", "city": "Corvallis", "year": 2018,
+    "expense": "General Fund", "expected": 53134840,
+    "category": "always_fail",
+    "pdf": "or_corvallis_18.pdf"
+  },
+  {
+    "state": "WI", "city": "Milwaukee", "year": 2019,
+    "expense": "General Fund", "expected": 634116281,
+    "category": "always_fail",
+    "pdf": "wi_milwaukee_19.pdf"
+  }
+]

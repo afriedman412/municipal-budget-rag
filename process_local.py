@@ -3,7 +3,6 @@
 import argparse
 import asyncio
 import logging
-import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,12 +31,15 @@ FILES = [
 
 async def main():
     ap = argparse.ArgumentParser(description="Process local PDFs")
-    ap.add_argument("--parser", choices=["aryn", "pymupdf", "pdfplumber"], default="aryn",
+    ap.add_argument("--parser", choices=["aryn", "pymupdf", "pdfplumber", "llamaparse", "unstructured"], default="aryn",
                     help="PDF parser to use (default: aryn)")
     ap.add_argument("files", nargs="*", help="PDF filenames (default: FILES list)")
     args = ap.parse_args()
 
     config = Config.from_env()
+    # Route to parser-specific ChromaDB collection
+    config.chroma_collection = f"budgets-{args.parser}"
+    logger.info(f"ChromaDB collection: {config.chroma_collection}")
     parser = get_parser(args.parser, config)
     embedder = EmbeddingClient(config)
     chroma = ChromaClient(config)

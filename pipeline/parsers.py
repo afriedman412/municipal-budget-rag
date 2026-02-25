@@ -174,5 +174,11 @@ def get_parser(name: str, config):
     elif name == "pdfplumber":
         from .pdfplumber_parser import PdfPlumberClient
         return PdfPlumberClient(config)
+    elif name == "llamaparse":
+        from .llamaparse import LlamaParseClient
+        return LlamaParseClient(config)
+    elif name == "unstructured":
+        from .unstructured import UnstructuredClient_
+        return UnstructuredClient_(config)
     else:
-        raise ValueError(f"Unknown parser: {name}. Use 'aryn', 'pymupdf', or 'pdfplumber'.")
+        raise ValueError(f"Unknown parser: {name}. Use 'aryn', 'pymupdf', 'pdfplumber', 'llamaparse', or 'unstructured'.")

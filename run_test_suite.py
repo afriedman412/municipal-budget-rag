@@ -1,9 +1,11 @@
 """Run all 6 test suites and print a summary grid."""
 
 import argparse
+import json
 import subprocess
 import re
 import sys
+import urllib.request
 
 SUITES = [
     ("pymupdf",    "clean", "training/test_chunks_val.json"),
@@ -14,24 +16,62 @@ SUITES = [
     ("aryn",       "d4",    "training/test_chunks_val_aryn_d4.json"),
 ]
 
+BAR_WIDTH = 30
+
+def progress_bar(done, total, label):
+    frac = done / total if total else 0
+    filled = int(BAR_WIDTH * frac)
+    bar = "\u2588" * filled + "\u2591" * (BAR_WIDTH - filled)
+    sys.stderr.write(f"\r  {label}  {bar} {done}/{total}")
+    sys.stderr.flush()
+
+
 def run_suite(parser, condition, cache, model, version, llm_url, workers, extra_args):
     ver = f"{version}-val-{parser}-{condition}"
     cmd = [
-        sys.executable, "test_llm_extraction.py",
+        sys.executable, "-u", "test_llm_extraction.py",
         "--llm-url", llm_url,
         "--model", model,
         "--cache", cache,
         "--version", ver,
         "--workers", str(workers),
     ] + extra_args
-    print(f"\n{'='*60}")
-    print(f"  {parser} / {condition}  ({cache})")
-    print(f"{'='*60}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    print(result.stdout)
-    if result.stderr:
-        print(result.stderr, file=sys.stderr)
-    return result.stdout
+
+    # Get total record count from cache file
+    try:
+        total = len(json.load(open(cache)))
+    except Exception:
+        total = 60
+
+    label = f"{parser}/{condition}"
+    done = 0
+    progress_bar(done, total, label)
+
+    output_lines = []
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    for line in proc.stdout:
+        output_lines.append(line)
+        if "OK" in line or "MISS" in line or "CLOSE" in line or "NO CHUNKS" in line:
+            done += 1
+            progress_bar(done, total, label)
+    proc.wait()
+    if proc.stderr:
+        err = proc.stderr.read()
+        if err:
+            print(err, file=sys.stderr)
+
+    # Clear progress bar and print summary line
+    sys.stderr.write("\r" + " " * 80 + "\r")
+    sys.stderr.flush()
+    output = "".join(output_lines)
+    info = parse_summary(output)
+    if info:
+        close = info.get("close", 0)
+        miss = info.get("miss", 0)
+        print(f"  {label:<20} {info['match']:>3}/{info['total']} ({info['pct']}%)   close:{close}  miss:{miss}")
+    else:
+        print(f"  {label:<20} FAILED")
+    return output
 
 
 def parse_summary(output):
@@ -62,12 +102,23 @@ def main():
     p.add_argument("--wandb", action="store_true", help="Pass --wandb to test script")
     args = p.parse_args()
 
+    # Check vLLM is reachable
+    try:
+        url = args.llm_url.rstrip("/") + "/models"
+        urllib.request.urlopen(url, timeout=5)
+    except Exception:
+        print(f"ERROR: vLLM not reachable at {args.llm_url}", file=sys.stderr)
+        sys.exit(1)
+
     extra = []
     if args.wandb:
         extra += ["--wandb"]
     if args.samples > 1:
         extra += ["--samples", str(args.samples)]
     results = []
+
+    print(f"\n  {args.model} ({args.version})")
+    print(f"  {'='*50}")
 
     for parser, condition, cache in SUITES:
         output = run_suite(parser, condition, cache, args.model, args.version,
@@ -76,19 +127,18 @@ def main():
         results.append((parser, condition, info))
 
     # Summary grid
-    print(f"\n{'='*60}")
-    print(f"  SUMMARY — {args.model} ({args.version})")
-    print(f"{'='*60}")
-    print(f"{'Parser':<12} {'Condition':<10} {'Match':>8} {'Close':>8} {'Miss':>8} {'In Chunks':>10}")
-    print("-" * 60)
+    print(f"\n  {'='*50}")
+    print(f"  SUMMARY")
+    print(f"  {'-'*50}")
     for parser, condition, info in results:
+        label = f"{parser}/{condition}"
         if info:
-            close = info.get("close", "-")
-            miss = info.get("miss", "-")
-            ic = info.get("in_chunks", "-")
-            print(f"{parser:<12} {condition:<10} {info['match']:>3}/{info['total']} ({info['pct']}%) {close:>8} {miss:>8} {ic:>10}")
+            close = info.get("close", 0)
+            miss = info.get("miss", 0)
+            print(f"  {label:<20} {info['match']:>3}/{info['total']} ({info['pct']}%)   close:{close}  miss:{miss}")
         else:
-            print(f"{parser:<12} {condition:<10} {'FAILED':>8}")
+            print(f"  {label:<20} FAILED")
+    print()
 
 
 if __name__ == "__main__":

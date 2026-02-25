@@ -110,27 +110,67 @@
   - pdfplumber: 70→68% clean (-2), 62→60% d4 (-2) — slightly worse
 - **Takeaway**: Distractor training helps the parser it was trained on (pymupdf). PyMuPDF d4 gap narrowed from 15% to 10%. Aryn slightly improved on d4. pdfplumber slightly regressed. Loss still falling at epoch 5 — continuing to 10 epochs.
 
-## V6 (10 epochs) — *training in progress*
+## V6 (10 epochs) — No improvement over 5 epochs
+- **Date**: 2026-02-24
+- **Model**: budget-mistral-lora-v6-merged (continued training to 10 epochs)
+- **Training**: Same as V6 5ep, continued to 10 epochs. LR near zero by end (cosine schedule).
+- **Results** (val only, 60 records):
+  - Clean scores **identical** to V6 5-epoch
+  - D4 scores **each dropped by 1** vs V6 5-epoch
+- **Takeaway**: 10 epochs adds no new exact matches. Some MISSes softened to CLOSE but nothing flipped to correct. 5 epochs is the sweet spot for this data size.
+
+## V7 — More distractors + tuned LoRA params
+- **Date**: 2026-02-25
+- **Model**: budget-mistral-lora-v7-merged (LoRA on Mistral 7B)
+- **Training**:
+  - 1,378 examples (689 cities x 2 expenses, PyMuPDF pages only)
+  - 4 random distractor pages per example (up from 2 in V6)
+  - 5 epochs, **lr=1e-4** (halved), batch=2, grad_accum=4, max_seq_len=8192
+  - **LoRA r=32** (up from 16), **alpha=64** (2*r), **warmup=0.1** (up from 0.05)
+  - Train/val split: 689 train / 30 validation (same 30 val cities)
+  - 865 steps total (173/epoch)
+- **Inference params**: n-chunks=5 (via cached test chunks), max_tokens=50, temperature=0, samples=5
+- **Results** (val only, 60 records):
+  - PyMuPDF clean: **51/60 (85%)**, PyMuPDF d4: **43/60 (72%)**
+  - Aryn clean: **52/60 (87%)**, Aryn d4: **48/60 (80%)**
+  - pdfplumber clean: **46/60 (77%)**, pdfplumber d4: **39/60 (65%)**
+- **V6 → V7 comparison**:
+  - PyMuPDF: 83→85% clean (+2), 73→72% d4 (-1)
+  - Aryn: 87→87% clean (0), 78→80% d4 (+2)
+  - pdfplumber: 68→77% clean (+9), 60→65% d4 (+5)
+- **V7 wins** (stubborn failures fixed):
+  - Milwaukee WI 2019 GF: **fixed in all 4 combos** (was returning Police $299M, now correct $634M)
+  - Eau Claire WI 2021 GF: fixed in 3/4 combos
+  - Corvallis OR 2018 GF: fixed on pymupdf-clean, improved to CLOSE on 2 others
+  - San Rafael CA 2018 GF: CLOSE → OK on pymupdf-clean
+- **V7 regressions**:
+  - Pflugerville TX 2020 Police: new systematic failure in 3/4 combos ($11.9M instead of $14.4M)
+  - Nogales AZ 2023: fixed Police but broke GF (expense type confusion)
+  - Dover DE 2018/2019: both regressed from CLOSE to MISS on pymupdf-d4
+- **Takeaway**: V7 fixed the hardest wrong_scope cases (Milwaukee, Eau Claire) but introduced new regressions elsewhere — net wash on totals. Training param tweaks helped on specific hard cases but didn't lift the overall ceiling. Likely near the limit for this model/data size.
 
 ---
 
 ## Controlled variables to track per run
-| Variable | V1 | V2 | V3 | V4 | V5 | V6 (5ep) |
-|---|---|---|---|---|---|---|
-| Base model | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 |
-| Fine-tuned | no | yes | yes | yes | yes | yes |
-| Training examples | - | 517 | 206 | 206 | 1,378 | 1,378 |
-| Training source | - | mixed (PyMuPDF + Aryn) | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only |
-| Distractors (train) | - | 4 per example | 0 | 4 random pages | 0 | 2 random pages |
-| Epochs | - | 3 | 10 | 10 (crashed) | 5 (resumed from 2) | 5 |
-| Final loss | - | 0.985 | ~0.34 | ~0.6 (messy) | ~0.70 (epoch 2.3) | ~0.603 |
-| n-chunks (test) | 20 | 5 | 1 (target page) | 1 or 5 | 1 or 5 | 1 or 5 |
-| max_tokens | none | 50 | 50 | 50 | 50 | 50 |
-| Test records | 108 | 108 | 60 (val) + 266 (full) | 60 (val only) | 60 (val) + 1,438 (full) | 60 (val, 3 parsers) |
-| Val clean (pymupdf) | - | - | 67% | 67% | 73% | **83%** |
-| Val adversarial (pymupdf) | - | - | 63% | 57% | 73% | **73%** |
-| Full clean | - | - | 85% | - | 92% | - |
-| Full adversarial | - | - | 67% | - | 80% | - |
+| Variable | V1 | V2 | V3 | V4 | V5 | V6 (5ep) | V6 (10ep) | V7 |
+|---|---|---|---|---|---|---|---|---|
+| Base model | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 | Mistral 7B v0.3 |
+| Fine-tuned | no | yes | yes | yes | yes | yes | yes | yes |
+| Training examples | - | 517 | 206 | 206 | 1,378 | 1,378 | 1,378 | 1,378 |
+| Training source | - | mixed (PyMuPDF + Aryn) | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only | PyMuPDF pages only |
+| Distractors (train) | - | 4 per example | 0 | 4 random pages | 0 | 2 random pages | 2 random pages | 4 random pages |
+| Epochs | - | 3 | 10 | 10 (crashed) | 5 (resumed from 2) | 5 | 10 | 5 |
+| LR | - | 2e-4 | 2e-4 | 2e-4 | 2e-4 | 2e-4 | 2e-4 | **1e-4** |
+| LoRA r / alpha | - | 16/16 | 16/16 | 16/16 | 16/16 | 16/16 | 16/16 | **32/64** |
+| Warmup | - | 0.05 | 0.05 | 0.05 | 0.05 | 0.05 | 0.05 | **0.1** |
+| Final loss | - | 0.985 | ~0.34 | ~0.6 (messy) | ~0.70 (epoch 2.3) | ~0.603 | TBD | TBD |
+| n-chunks (test) | 20 | 5 | 1 (target page) | 1 or 5 | 1 or 5 | 1 or 5 | 1 or 5 | 1 or 5 |
+| max_tokens | none | 50 | 50 | 50 | 50 | 50 | 50 | 50 |
+| Test records | 108 | 108 | 60 (val) + 266 (full) | 60 (val only) | 60 (val) + 1,438 (full) | 60 (val, 3 parsers) | 60 (val) | 60 (val, 3 parsers) |
+| Val clean (pymupdf) | - | - | 67% | 67% | 73% | **83%** | 83% | **85%** |
+| Val adversarial (pymupdf) | - | - | 63% | 57% | 73% | **73%** | 72% | **72%** |
+| Full clean | - | - | 85% | - | 92% | - | - | - |
+| Full adversarial | - | - | 67% | - | 80% | - | - | - |
 
 ## Error analysis (V5, 60 val records, all 6 parser/distractor combos)
 Spot-checked all 78 misses across 6 runs. Categories:
@@ -148,4 +188,7 @@ Spot-checked all 78 misses across 6 runs. Categories:
 4. **Aryn is the best parser**: 87% clean / 80% d4 — consistently outperforms pymupdf and pdfplumber
 5. **Wrong scope is the #1 error**: model finds a related number at wrong aggregation level (total vs GF, with/without transfers)
 6. **Many "misses" are debatable**: ambiguous gold truth (should transfers be included? operating vs final total?)
-7. **Next**: test V6 at 10 epochs, consider full-set evaluation
+7. **5 epochs is the sweet spot**: V6 10ep showed no improvement over 5ep (identical clean, -1 each on d4)
+8. **V7 fixed stubborn failures but net wash**: Milwaukee/Eau Claire/Corvallis improved, but new regressions (Pflugerville, Nogales, Dover) cancel it out
+9. **Approaching model/data ceiling**: V6→V7 param tweaks (lr, LoRA rank, distractors) didn't lift overall scores — next lever is parser quality
+10. **Next**: testing new parsers (Marker, LlamaParse, Unstructured) on focused 6-PDF test set

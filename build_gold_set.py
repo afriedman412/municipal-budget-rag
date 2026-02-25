@@ -90,6 +90,8 @@ async def main():
     collections = {
         "aryn": "budgets-aryn",
         "pymupdf": "budgets-pymupdf",
+        "llamaparse": "budgets-llamaparse",
+        "unstructured": "budgets-unstructured",
     }
 
     for parser_name, collection_name in collections.items():
