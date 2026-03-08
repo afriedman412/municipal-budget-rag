@@ -28,6 +28,7 @@ def parse_marker(pdf_path, max_pages=None):
     from marker.converters.pdf import PdfConverter
     from marker.config.parser import ConfigParser
     from marker.models import create_model_dict
+    from marker.output import text_from_rendered
 
     config_parser = ConfigParser({"output_format": "markdown"})
     converter = PdfConverter(
@@ -36,22 +37,17 @@ def parse_marker(pdf_path, max_pages=None):
         processor_list=config_parser.get_processors(),
         renderer=config_parser.get_renderer(),
     )
-    result = converter(str(pdf_path))
+    rendered = converter(str(pdf_path))
+    full_text, _, _ = text_from_rendered(rendered)
+
+    # Split on page breaks (Marker inserts \n\n---\n\n between pages)
+    page_texts = full_text.split("\n\n---\n\n") if "\n\n---\n\n" in full_text else [full_text]
 
     pages = []
-    for i, page in enumerate(result.children):
+    for i, text in enumerate(page_texts):
         if max_pages and i >= max_pages:
             break
-        # Each page has children blocks — extract text from each
-        parts = []
-        for block in page.children:
-            html = getattr(block, "html", "") or ""
-            # Strip HTML tags, keep content
-            import re
-            text = re.sub(r"<[^>]+>", "", html)
-            if text.strip():
-                parts.append(text.strip())
-        pages.append((i + 1, "\n".join(parts)))
+        pages.append((i + 1, text.strip()))
     return pages
 
 
