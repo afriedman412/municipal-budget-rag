@@ -136,127 +136,103 @@ Code transfer to VM via GitHub + deploy keys.
 
 ### Data
 - **~103 PDFs ingested** across ~50 states
-- **Separate ChromaDB collections**: `budgets-aryn` and `budgets-pymupdf` (local persistent, `chroma_data/`)
+- **ChromaDB collections** (local persistent, `chroma_data/`): `budgets-aryn` (9390), `budgets-pymupdf` (10075), `budgets-llamaparse` (1779), `budgets-unstructured` (1067)
 - **Ground truth DB**: SQLite `pipeline_state.db` → `validation` table with 6,126 records across 485 cities
   - Schema: `(state TEXT, city TEXT, year INTEGER, expense TEXT, budget_type TEXT, budget REAL, doc_page TEXT, pdf_page INTEGER)`
-- **209 gold records** in cached chunk files, pre-retrieved top 20 chunks each
+- **60 validation records** in test chunk cache files, per parser (test split)
 
 ### Test Set
-6 cities defined in `test_budgets.json` (each tested for General Fund + Police = 12 records):
-- Vallejo CA 2021, El Paso TX 2020, Corvallis OR 2018
-- Peekskill NY 2023, Carrollton GA 2022, Paducah KY 2022
+60 validation records across multiple cities, tested per parser and with/without distractors.
+6-city parser test set defined in `parser_test_set.json` for quick parser quality checks.
 
-### LLM Extraction Results (209 gold records, gold_chunks_cache.json)
+### V7 Results (fine-tuned Mistral 7B, 5 samples majority vote, new prompt)
 
-| Model | Chunks | Match | In Chunks | Extraction Rate |
-|-------|--------|-------|-----------|-----------------|
-| Base Mistral 7B | 10 | 63/209 (30%) | 139/209 (67%) | 63/139 (45%) |
-| **Fine-tuned** | **5** | **79/209 (38%)** | 126/209 (60%) | **79/126 (63%)** |
-| **Fine-tuned** | **10** | **84/209 (40%)** | 139/209 (67%) | **84/139 (60%)** |
+| Suite | Match | Close | Miss |
+|-------|-------|-------|------|
+| pymupdf/clean | 53/60 (88%) | 4 | 3 |
+| pymupdf/d4 | 45/60 (75%) | 4 | 11 |
+| aryn/clean | 53/60 (88%) | 4 | 3 |
+| aryn/d4 | 49/60 (81%) | 4 | 7 |
 
-- Fine-tuning improved extraction rate from 45% → 60% (same chunks)
-- Fine-tuned model outputs clean `$X,XXX,XXX` format (no more chatty responses)
-- More chunks improves retrieval but slightly hurts extraction (noise tradeoff)
-- **Error breakdown** (base, 10 chunks): wrong_scope 45, not_in_chunks 70, close_but_wrong 18, wrong_fund 7
-- **By expense type**: GF extraction 54%, Police extraction 38% — Police suffers more from wrong_scope (sub-department line items)
-- Test results saved as JSON in `runs/` directory for dashboard comparison
+- Aryn is best overall (81% on noisy d4 chunks vs 75% for pymupdf)
+- pymupdf and aryn tied at 88% on clean chunks
+- Model is very deterministic at temp=0.3 (multi-sample confirms)
+- 5 epochs is the sweet spot (10 epochs showed no improvement in V6)
+
+### Prompt Rules
+System prompt includes these extraction rules (in both `test_llm_extraction.py` and `build_training_data.py`):
+- Return EXPENDITURES only, ADOPTED/APPROVED budget, BUDGETED/APPROPRIATED amount
+- **For General Fund, return GF total only — not total/all-funds/combined budget**
+- For Police, return General Fund police expenditure
+- **Exclude interfund transfers if both values shown**
+- Return only `$X,XXX,XXX` format or "NOT FOUND"
+
+### Transfer Ambiguity Analysis
+- 719 General Fund records audited: 65% AMBIGUOUS, 30% EXCLUDES_TRANSFERS, 5% INCLUDES_TRANSFERS
+- Convention is clearly "excludes transfers" (214:35 ratio)
+- Only ~5-10 records where transfers actually cause CLOSE errors (Cincinnati, San Rafael, Eau Claire)
+- Not a major lever — wrong_scope and parser quality are bigger issues
 
 ### Fine-tuning Pipeline
 1. **`build_training_data.py`** — Generates training examples from validation table + local PDFs
    - Uses `pdf_page` column to find the page with the correct answer
-   - Adds 4 random distractor pages per example (simulates noisy retrieval)
+   - Configurable distractor pages per example (simulates noisy retrieval)
    - Stratified sampling: balanced General Fund + Police
-   - Generated 456 examples (231 GF + 225 Police), median ~2,700 tokens
 2. **`finetune.py`** — LoRA fine-tuning with unsloth + trl
-   - Mistral 7B in 4-bit, LoRA r=16 on all attention + MLP layers
-   - 3 epochs, batch 2, grad accum 4, lr 2e-4, cosine schedule
+   - Mistral 7B in 4-bit, LoRA on all attention + MLP layers
+   - Key params: epochs, lr, lora-r, lora-alpha, warmup, packing
    - Saves LoRA adapter + merged 16-bit model for vLLM serving
-3. **`training/training_data.jsonl`** — Chat-format training data (system/user/assistant messages)
+3. **`training/training_data_d4.jsonl`** — Current training data (4 distractors)
+
+### Fine-tuning History
+| Version | Epochs | LR | LoRA r | Distractors | aryn clean | aryn d4 |
+|---------|--------|----|--------|-------------|------------|---------|
+| V6 | 5 | 2e-4 | 16 | 2 | 87% | 78% |
+| V7 | 5 | 1e-4 | 32 | 4 | 88% | 81% |
 
 ### Key Scripts
 - `process_local.py` — Parse local PDFs → embed → index into parser-specific ChromaDB collection
-- `validate_retrieval.py` — Run retrieval validation against ground truth (string-match, no LLM)
-- `build_gold_set.py` — Build gold validation set + cache chunks from both parser collections
-- `test_llm_extraction.py` — Test LLM extraction on cached chunks (runs on VM)
+- `build_gold_set.py` — Build gold validation set + cache chunks from all parser collections
+- `test_llm_extraction.py` — Test LLM extraction on cached chunks (runs on VM). Supports `--samples N` for majority vote
+- `run_test_suite.py` — Run all 6 test suites (pymupdf/aryn/pdfplumber x clean/d4), print summary grid
 - `build_training_data.py` — Generate fine-tuning JSONL from validation table + PDFs
 - `finetune.py` — LoRA fine-tune Mistral 7B on budget extraction
-- `test_docling.py` — Test Docling parser on test PDFs (number-in-text check)
-- `analyze_results.py` — Analyze/compare test run JSON files (GF vs Police, error categories, diffs)
+- `test_parser.py` — Quick parser quality test (number-in-text check) for multiple parsers
+- `validate_transfers.py` — Audit ground truth for transfer inclusion/exclusion
+- `analyze_results.py` — Analyze/compare test run JSON files
 - `dashboard.html` — Browser-based dashboard for comparing test runs (load JSON files from `runs/`)
-- `test_budgets.json` — Defines the 6-city test set
+- `config.py` — Central config: test PDFs, parser list, paths, embedding params
 - `start_vm.sh` — Start GCP VM + launch vLLM + SSH session
 
-### Cached Data Files (in `training/`)
-- `training/gold_validation_set.json` — 209 gold records (state, city, year, expense, budget_type, budget)
-- `training/gold_query_embeddings.json` — 3 pre-computed query embeddings (General Fund, Police, Education)
-- `training/gold_chunks_aryn.json` — Cached top-20 chunks per gold record from Aryn collection
-- `training/gold_chunks_pymupdf.json` — Cached top-20 chunks per gold record from PyMuPDF collection
-- `training/gold_chunks_cache.json` — Legacy combined cache (both parsers mixed)
-- `training/training_data.jsonl` — 456 fine-tuning examples in chat format
+### Parser Comparison (tested on 6-city parser test set)
 
-### Aryn API Notes
-
-**PAYG Tier ($2/1000 pages)** — currently active:
-- Unlimited pages
-- Async API available for concurrent/parallel processing
-- Use `partition_file_async_submit` / `partition_file_async_result` for batch processing
-
-**SDK Functions:**
-- `partition_file(file, aryn_api_key=...)` - sync parsing
-- `partition_file_async_submit(file, ...)` - submit for async
-- `partition_file_async_result(task_id, ...)` - poll for result
-- `selected_pages` param can process specific page ranges
-
-**Docs:** https://docs.aryn.ai/docparse/aryn_sdk
+| Parser | Speed | Cost | Test Set Quality | Verdict |
+|--------|-------|------|-----------------|---------|
+| **Aryn** | Fast (cloud) | $2/1000 pages | **88% (best)** | **Use this** |
+| PyMuPDF | Instant | Free | 88% clean, 75% d4 | Good free option |
+| LlamaParse | Fast (cloud) | Free tier 1K pg/day | 3/6 (50%) | Not worth it |
+| Unstructured | Very slow | Free tier | 2/6 (33%) | Too slow + errors |
+| Docling | Very slow | Free (GPU) | TBD | Too slow |
+| pdfplumber | Fast | Free | ~73% clean | Moderate |
 
 ### Known Issues
-- Dual parser chunks may duplicate content, wasting chunk slots (mitigated by separate collections)
-- Biennial budgets (e.g., 2018-2019) cause confusion — avoid using cities with biennial/mid-biennial budgets in test set
-- Some gold truth values may be wrong (e.g., Fairbanks Police case)
-- Peekskill NY: Aryn parser failed to produce usable chunks
-- Prompt changes alone didn't improve extraction accuracy — fine-tuning is the path forward
+- Biennial budgets (e.g., 2018-2019) cause confusion — avoid in test set
+- Some gold truth values may be wrong (e.g., transfer inclusion inconsistency)
+- Corvallis OR 2018 GF: stubborn miss across all models/parsers
+- Milwaukee WI, Eau Claire WI: consistently regress between model versions
+- Wrong_scope (~30 records) is the biggest error category — model picks All Funds instead of GF
 
-### Fine-tuning Status
-- LoRA fine-tuning completed (3 epochs, ~2 hours on L4 GPU, 456 examples)
-- Merged model saved on VM at `budget-mistral-lora-merged/` (~14GB)
-- **Fine-tuning works**: extraction rate 45% → 60% on 209 records (10 chunks)
-- Model outputs clean dollar amounts, no more chatty/verbose responses
+### GCP VM
+- Instance: muni-rag-420, zone us-central1-a, g2-standard-8, L4 GPU (24GB VRAM)
+- ~$0.90/hr — stop when done
 - VM venvs: `venv-vllm` (vLLM serving), `venv-finetune` (unsloth + openai + training)
-- Fixed bf16/fp16 mismatch: L4 loads in bfloat16, so `bf16=True` in SFTConfig (not fp16)
-- Serve fine-tuned model: `vllm serve ~/budget-mistral-lora-merged --port 8000 --max-model-len 32768`
-
-### Retrieval Analysis (2026-02-17)
-- **75% ceiling**: with 40 chunks, only 164/219 records have the exact answer in chunks
-- **55 misses** broken down:
-  - 6 parser failures (<10 chunks): Mountain Home, Henderson, Peekskill
-  - 7 biennial budget confusion: Dothan, Davis, Birmingham
-  - 44 number in document but parser mangled it (millions prefix found, exact value not)
-  - 5 no trace of number at all
-- **Aryn vs PyMuPDF** (12 test records): Aryn 10/12 (83%), PyMuPDF 7/12 (58%)
-- **Chunk count doesn't matter**: answer is in top 5 or not at all
-- **Key insight**: 44/55 misses are table extraction quality — the number is there but garbled
-
-### Docling Parser Test (2026-02-17)
-- Installed Docling locally and on VM (`venv-finetune`)
-- `test_docling.py` — parses PDFs with Docling, checks if expected numbers appear in full text
-- **Result: too slow** — even on L4 GPU (2GB VRAM used, CUDA confirmed), 10+ minutes per large PDF
-- Docling uses ML-based layout detection (CPU-bound rendering + GPU inference) — not practical for production
-- Still waiting for full results to see accuracy vs Aryn/PyMuPDF
-
-### Parser Speed/Cost/Quality Comparison
-| Parser | Speed | Cost | Table Quality |
-|--------|-------|------|--------------|
-| Aryn | Fast (cloud) | $2/1000 pages | Good (83% hit rate) |
-| Docling | Very slow | Free (GPU time) | TBD |
-| PyMuPDF | Instant | Free | Poor (58% hit rate) |
-| pdfplumber | Fast | Free | Moderate (untested) |
+- Models on VM: `budget-mistral-lora-v3/v4/v5/v6/v7-merged`
+- Serve: `vllm serve budget-mistral-lora-v7-merged --port 8000 --max-model-len 32768`
+- Code transfer via GitHub + deploy keys
 
 ### Next Steps
-1. **Find optimal chunk count** — testing 5/10/15 to find sweet spot (retrieval vs noise tradeoff)
-2. **Scale up training data** — more examples, especially Police wrong_scope cases
-3. **Test per-parser chunks** — run fine-tuned model on `training/gold_chunks_aryn.json` vs `training/gold_chunks_pymupdf.json`
-4. **Improve retrieval** — 33% of records still missing from chunks (parser quality issue)
-5. **Future**: consider pdfplumber as fast+free parser with table support
+1. **Retrain with updated prompt** — regenerate training data with GF-scope and transfer-exclusion rules
+2. **Address wrong_scope in training data** — ensure examples include pages with both All Funds and GF totals
 
 ### Debugging Tips
 - Check status: `python -m pipeline status`

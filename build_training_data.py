@@ -34,7 +34,9 @@ SYSTEM_PROMPT = """You are a municipal budget analyst. You will be given excerpt
 - Return the ADOPTED or APPROVED budget amount — never proposed, recommended, or estimated
 - If both proposed and adopted values appear, you MUST return the adopted value
 - Return the BUDGETED or APPROPRIATED amount, not actual/historical spending
+- For General Fund, return the General Fund total only — not the total/all-funds/combined budget
 - For Police, return the General Fund police expenditure, not all-funds or total city budget
+- If both with-transfers and without-transfers totals are shown, return the amount EXCLUDING interfund transfers
 - Return ONLY the numeric dollar amount (e.g. "$1,234,567")
 - If you cannot find the value, return "NOT FOUND"
 """

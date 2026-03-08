@@ -62,7 +62,9 @@ def parse_page_text(pdf_path, page_idx, parser="pymupdf"):
     Returns:
         Extracted text string, or None if page is out of range.
     """
-    if parser == "pdfplumber":
+    if parser == "marker":
+        return _marker_page_text(pdf_path, page_idx)
+    elif parser == "pdfplumber":
         import pdfplumber
         with pdfplumber.open(str(pdf_path)) as pdf:
             if page_idx < 0 or page_idx >= len(pdf.pages):
@@ -80,6 +82,15 @@ def parse_page_text(pdf_path, page_idx, parser="pymupdf"):
             return re.sub(r'\n{3,}', '\n\n', text).strip()
         finally:
             doc.close()
+
+
+def _marker_page_text(pdf_path, page_idx):
+    """Extract text from a single PDF page using Marker."""
+    from .marker_parser import _parse_pdf
+    _, pages = _parse_pdf(Path(pdf_path))
+    if page_idx < 0 or page_idx >= len(pages):
+        return None
+    return pages[page_idx].strip() or None
 
 
 def _aryn_page_text(pdf_path, page_idx, max_retries=5):
@@ -180,5 +191,8 @@ def get_parser(name: str, config):
     elif name == "unstructured":
         from .unstructured import UnstructuredClient_
         return UnstructuredClient_(config)
+    elif name == "marker":
+        from .marker_parser import MarkerClient
+        return MarkerClient(config)
     else:
-        raise ValueError(f"Unknown parser: {name}. Use 'aryn', 'pymupdf', 'pdfplumber', 'llamaparse', or 'unstructured'.")
+        raise ValueError(f"Unknown parser: {name}. Use 'aryn', 'pymupdf', 'pdfplumber', 'llamaparse', 'unstructured', or 'marker'.")
