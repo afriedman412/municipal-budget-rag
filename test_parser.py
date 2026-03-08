@@ -27,17 +27,31 @@ def parse_marker(pdf_path, max_pages=None):
     """Parse PDF with Marker (local, GPU). pip install marker-pdf"""
     from marker.converters.pdf import PdfConverter
     from marker.config.parser import ConfigParser
+    from marker.models import create_model_dict
 
     config_parser = ConfigParser({"output_format": "markdown"})
-    converter = PdfConverter(config=config_parser.generate_config_dict())
-    result = converter(pdf_path)
+    converter = PdfConverter(
+        config=config_parser.generate_config_dict(),
+        artifact_dict=create_model_dict(),
+        processor_list=config_parser.get_processors(),
+        renderer=config_parser.get_renderer(),
+    )
+    result = converter(str(pdf_path))
 
     pages = []
-    for i, page in enumerate(result.pages):
+    for i, page in enumerate(result.children):
         if max_pages and i >= max_pages:
             break
-        text = page.rendered.text if hasattr(page, "rendered") else str(page)
-        pages.append((i + 1, text))
+        # Each page has children blocks — extract text from each
+        parts = []
+        for block in page.children:
+            html = getattr(block, "html", "") or ""
+            # Strip HTML tags, keep content
+            import re
+            text = re.sub(r"<[^>]+>", "", html)
+            if text.strip():
+                parts.append(text.strip())
+        pages.append((i + 1, "\n".join(parts)))
     return pages
 
 
