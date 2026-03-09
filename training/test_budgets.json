@@ -1,0 +1,422 @@
+[
+  {
+    "state": "TX",
+    "city": "Pflugerville",
+    "year": 2020,
+    "expense": "General Fund",
+    "budget": 42201781.0
+  },
+  {
+    "state": "TX",
+    "city": "Pflugerville",
+    "year": 2020,
+    "expense": "Police",
+    "budget": 14439610.0
+  },
+  {
+    "state": "NY",
+    "city": "Syracuse",
+    "year": 2021,
+    "expense": "General Fund",
+    "budget": 144209495.0
+  },
+  {
+    "state": "NY",
+    "city": "Syracuse",
+    "year": 2021,
+    "expense": "Police",
+    "budget": 47916893.0
+  },
+  {
+    "state": "CA",
+    "city": "San Diego",
+    "year": 2024,
+    "expense": "General Fund",
+    "budget": 2081833190.0
+  },
+  {
+    "state": "CA",
+    "city": "San Diego",
+    "year": 2024,
+    "expense": "Police",
+    "budget": 622908762.0
+  },
+  {
+    "state": "CA",
+    "city": "Belvedere",
+    "year": 2021,
+    "expense": "General Fund",
+    "budget": 5529467.0
+  },
+  {
+    "state": "CA",
+    "city": "Belvedere",
+    "year": 2021,
+    "expense": "Police",
+    "budget": 1655933.0
+  },
+  {
+    "state": "WY",
+    "city": "Cheyenne",
+    "year": 2022,
+    "expense": "General Fund",
+    "budget": 53893219.0
+  },
+  {
+    "state": "WY",
+    "city": "Cheyenne",
+    "year": 2022,
+    "expense": "Police",
+    "budget": 14600577.0
+  },
+  {
+    "state": "OR",
+    "city": "Corvallis",
+    "year": 2018,
+    "expense": "General Fund",
+    "budget": 53134840.0
+  },
+  {
+    "state": "OR",
+    "city": "Corvallis",
+    "year": 2018,
+    "expense": "Police",
+    "budget": 13045780.0
+  },
+  {
+    "state": "CA",
+    "city": "Manhattan Beach",
+    "year": 2018,
+    "expense": "General Fund",
+    "budget": 70400265.0
+  },
+  {
+    "state": "CA",
+    "city": "Manhattan Beach",
+    "year": 2018,
+    "expense": "Police",
+    "budget": 28048875.0
+  },
+  {
+    "state": "WY",
+    "city": "Casper",
+    "year": 2020,
+    "expense": "General Fund",
+    "budget": 49279492.0
+  },
+  {
+    "state": "WY",
+    "city": "Casper",
+    "year": 2020,
+    "expense": "Police",
+    "budget": 15711315.0
+  },
+  {
+    "state": "WI",
+    "city": "Green Bay",
+    "year": 2020,
+    "expense": "General Fund",
+    "budget": 86259124.0
+  },
+  {
+    "state": "WI",
+    "city": "Green Bay",
+    "year": 2020,
+    "expense": "Police",
+    "budget": 27375621.0
+  },
+  {
+    "state": "AZ",
+    "city": "Flagstaff",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 74623301.0
+  },
+  {
+    "state": "AZ",
+    "city": "Flagstaff",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 23046315.0
+  },
+  {
+    "state": "DE",
+    "city": "Dover",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 45818700.0
+  },
+  {
+    "state": "DE",
+    "city": "Dover",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 16737500.0
+  },
+  {
+    "state": "NY",
+    "city": "Schenectady",
+    "year": 2023,
+    "expense": "General Fund",
+    "budget": 103950721.0
+  },
+  {
+    "state": "NY",
+    "city": "Schenectady",
+    "year": 2023,
+    "expense": "Police",
+    "budget": 23166713.0
+  },
+  {
+    "state": "DE",
+    "city": "Dover",
+    "year": 2018,
+    "expense": "General Fund",
+    "budget": 42861000.0
+  },
+  {
+    "state": "DE",
+    "city": "Dover",
+    "year": 2018,
+    "expense": "Police",
+    "budget": 16483900.0
+  },
+  {
+    "state": "WY",
+    "city": "Cody",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 9654161.0
+  },
+  {
+    "state": "WY",
+    "city": "Cody",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 3208861.0
+  },
+  {
+    "state": "CA",
+    "city": "Pomona",
+    "year": 2020,
+    "expense": "General Fund",
+    "budget": 113763884.0
+  },
+  {
+    "state": "CA",
+    "city": "Pomona",
+    "year": 2020,
+    "expense": "Police",
+    "budget": 60248828.0
+  },
+  {
+    "state": "CO",
+    "city": "Grand Junction",
+    "year": 2021,
+    "expense": "General Fund",
+    "budget": 79925168.0
+  },
+  {
+    "state": "CO",
+    "city": "Grand Junction",
+    "year": 2021,
+    "expense": "Police",
+    "budget": 25265107.0
+  },
+  {
+    "state": "PA",
+    "city": "State College",
+    "year": 2022,
+    "expense": "General Fund",
+    "budget": 32519887.0
+  },
+  {
+    "state": "PA",
+    "city": "State College",
+    "year": 2022,
+    "expense": "Police",
+    "budget": 10790764.0
+  },
+  {
+    "state": "WA",
+    "city": "Walla Walla",
+    "year": 2022,
+    "expense": "General Fund",
+    "budget": 38843280.0
+  },
+  {
+    "state": "WA",
+    "city": "Walla Walla",
+    "year": 2022,
+    "expense": "Police",
+    "budget": 9719610.0
+  },
+  {
+    "state": "WI",
+    "city": "Milwaukee",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 634116281.0
+  },
+  {
+    "state": "WI",
+    "city": "Milwaukee",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 298922696.0
+  },
+  {
+    "state": "TX",
+    "city": "Midland",
+    "year": 2022,
+    "expense": "General Fund",
+    "budget": 137666537.0
+  },
+  {
+    "state": "TX",
+    "city": "Midland",
+    "year": 2022,
+    "expense": "Police",
+    "budget": 35343635.0
+  },
+  {
+    "state": "WY",
+    "city": "Casper",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 46487433.0
+  },
+  {
+    "state": "WY",
+    "city": "Casper",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 14087009.0
+  },
+  {
+    "state": "OH",
+    "city": "Hamilton",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 34604076.0
+  },
+  {
+    "state": "OH",
+    "city": "Hamilton",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 15618960.0
+  },
+  {
+    "state": "WI",
+    "city": "Eau Claire",
+    "year": 2021,
+    "expense": "General Fund",
+    "budget": 77116285.0
+  },
+  {
+    "state": "WI",
+    "city": "Eau Claire",
+    "year": 2021,
+    "expense": "Police",
+    "budget": 19248400.0
+  },
+  {
+    "state": "WY",
+    "city": "Casper",
+    "year": 2021,
+    "expense": "General Fund",
+    "budget": 46113576.0
+  },
+  {
+    "state": "WY",
+    "city": "Casper",
+    "year": 2021,
+    "expense": "Police",
+    "budget": 15196734.0
+  },
+  {
+    "state": "NY",
+    "city": "Ithaca",
+    "year": 2021,
+    "expense": "General Fund",
+    "budget": 61613893.0
+  },
+  {
+    "state": "NY",
+    "city": "Ithaca",
+    "year": 2021,
+    "expense": "Police",
+    "budget": 12523756.0
+  },
+  {
+    "state": "CT",
+    "city": "New Haven",
+    "year": 2019,
+    "expense": "General Fund",
+    "budget": 547089954.0
+  },
+  {
+    "state": "CT",
+    "city": "New Haven",
+    "year": 2019,
+    "expense": "Police",
+    "budget": 41897917.0
+  },
+  {
+    "state": "NH",
+    "city": "Manchester",
+    "year": 2022,
+    "expense": "General Fund",
+    "budget": 162545854.0
+  },
+  {
+    "state": "NH",
+    "city": "Manchester",
+    "year": 2022,
+    "expense": "Police",
+    "budget": 28739541.0
+  },
+  {
+    "state": "OH",
+    "city": "Cincinnati",
+    "year": 2024,
+    "expense": "General Fund",
+    "budget": 504080750.0
+  },
+  {
+    "state": "OH",
+    "city": "Cincinnati",
+    "year": 2024,
+    "expense": "Police",
+    "budget": 180510570.0
+  },
+  {
+    "state": "AZ",
+    "city": "Nogales",
+    "year": 2023,
+    "expense": "General Fund",
+    "budget": 41040055.0
+  },
+  {
+    "state": "AZ",
+    "city": "Nogales",
+    "year": 2023,
+    "expense": "Police",
+    "budget": 9222011.0
+  },
+  {
+    "state": "CA",
+    "city": "San Rafael",
+    "year": 2018,
+    "expense": "General Fund",
+    "budget": 74863946.0
+  },
+  {
+    "state": "CA",
+    "city": "San Rafael",
+    "year": 2018,
+    "expense": "Police",
+    "budget": 24959430.0
+  }
+]

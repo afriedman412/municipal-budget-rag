@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 
@@ -47,8 +48,8 @@ def parse_page_pymupdf(pdf_path, page_idx):
 _marker_converter = None
 
 
-def parse_page_marker(pdf_path, page_idx):
-    """Parse a single page with Marker. Caches the converter across calls."""
+def _get_marker_converter():
+    """Lazily initialize the Marker converter (caches across calls)."""
     global _marker_converter
     if _marker_converter is None:
         from marker.converters.pdf import PdfConverter
@@ -61,69 +62,101 @@ def parse_page_marker(pdf_path, page_idx):
             processor_list=config_parser.get_processors(),
             renderer=config_parser.get_renderer(),
         )
+    return _marker_converter
 
+
+def _extract_pages_to_temp_pdf(pdf_path, page_indices):
+    """Use PyMuPDF to extract specific pages into a temp PDF. Returns (temp_path, page_map).
+    page_map maps original page index -> index in temp PDF."""
+    import fitz
+    doc = fitz.open(str(pdf_path))
+    try:
+        # Filter to valid pages and deduplicate, preserving order
+        valid = []
+        seen = set()
+        for idx in page_indices:
+            if 0 <= idx < len(doc) and idx not in seen:
+                valid.append(idx)
+                seen.add(idx)
+
+        if not valid:
+            return None, {}
+
+        new_doc = fitz.open()
+        page_map = {}  # original_idx -> temp_idx
+        for temp_idx, orig_idx in enumerate(valid):
+            new_doc.insert_pdf(doc, from_page=orig_idx, to_page=orig_idx)
+            page_map[orig_idx] = temp_idx
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        new_doc.save(tmp.name)
+        new_doc.close()
+        return tmp.name, page_map
+    finally:
+        doc.close()
+
+
+def _parse_marker_pages(pdf_path, page_indices):
+    """Parse specific pages with Marker by extracting them to a temp PDF first.
+    Returns dict mapping original page index -> parsed text."""
+    converter = _get_marker_converter()
     from marker.output import text_from_rendered
-    rendered = _marker_converter(str(pdf_path))
-    full_text, _, _ = text_from_rendered(rendered)
 
-    # Split on page breaks
-    if "\n\n---\n\n" in full_text:
-        pages = full_text.split("\n\n---\n\n")
-    else:
-        pages = [full_text]
+    tmp_path, page_map = _extract_pages_to_temp_pdf(pdf_path, page_indices)
+    if tmp_path is None:
+        return {}
 
-    if page_idx < 0 or page_idx >= len(pages):
-        return None
-    return pages[page_idx].strip() or None
+    try:
+        rendered = converter(tmp_path)
+        full_text, _, _ = text_from_rendered(rendered)
+
+        if "\n\n---\n\n" in full_text:
+            parsed_pages = [p.strip() for p in full_text.split("\n\n---\n\n")]
+        else:
+            parsed_pages = [full_text.strip()]
+
+        # Map back to original page indices
+        result = {}
+        for orig_idx, temp_idx in page_map.items():
+            if temp_idx < len(parsed_pages) and parsed_pages[temp_idx]:
+                result[orig_idx] = parsed_pages[temp_idx]
+        return result
+    finally:
+        os.unlink(tmp_path)
 
 
-# Cache entire PDF parse results to avoid re-parsing for each page
+# Cache parsed pages per PDF (key: pdf_path, value: {page_idx: text})
 _pdf_cache = {}
 
 
-def parse_page(pdf_path, page_idx, parser):
-    """Parse a single page, with per-PDF caching for Marker."""
+def parse_pages(pdf_path, page_indices, parser):
+    """Parse multiple pages from a PDF. Returns dict of {page_idx: text}.
+    For Marker, extracts only needed pages into a temp PDF first."""
     if parser == "pymupdf":
-        return parse_page_pymupdf(pdf_path, page_idx)
+        result = {}
+        for idx in page_indices:
+            text = parse_page_pymupdf(pdf_path, idx)
+            if text:
+                result[idx] = text
+        return result
     elif parser == "marker":
         key = str(pdf_path)
         if key not in _pdf_cache:
-            # Parse entire PDF once, cache all pages
-            _pdf_cache[key] = _parse_all_pages_marker(pdf_path)
-        pages = _pdf_cache[key]
-        if page_idx < 0 or page_idx >= len(pages):
-            return None
-        return pages[page_idx]
+            _pdf_cache[key] = {}
+        # Find pages we haven't cached yet
+        needed = [idx for idx in page_indices if idx not in _pdf_cache[key]]
+        if needed:
+            parsed = _parse_marker_pages(pdf_path, needed)
+            _pdf_cache[key].update(parsed)
+        return {idx: _pdf_cache[key][idx] for idx in page_indices if idx in _pdf_cache[key]}
     else:
-        # Fallback to pipeline parser (needs pipeline deps)
         from pipeline.parsers import parse_page_text
-        return parse_page_text(pdf_path, page_idx, parser=parser)
-
-
-def _parse_all_pages_marker(pdf_path):
-    """Parse all pages of a PDF with Marker. Returns list of page texts."""
-    global _marker_converter
-    if _marker_converter is None:
-        from marker.converters.pdf import PdfConverter
-        from marker.config.parser import ConfigParser
-        from marker.models import create_model_dict
-        config_parser = ConfigParser({"output_format": "markdown"})
-        _marker_converter = PdfConverter(
-            config=config_parser.generate_config_dict(),
-            artifact_dict=create_model_dict(),
-            processor_list=config_parser.get_processors(),
-            renderer=config_parser.get_renderer(),
-        )
-
-    from marker.output import text_from_rendered
-    rendered = _marker_converter(str(pdf_path))
-    full_text, _, _ = text_from_rendered(rendered)
-
-    if "\n\n---\n\n" in full_text:
-        pages = [p.strip() for p in full_text.split("\n\n---\n\n")]
-    else:
-        pages = [full_text.strip()]
-    return pages
+        result = {}
+        for idx in page_indices:
+            text = parse_page_text(pdf_path, idx, parser=parser)
+            if text:
+                result[idx] = text
+        return result
 
 
 def main():
@@ -202,12 +235,22 @@ def main():
             continue
 
         try:
-            target_text = parse_page(pdf_path, target_page, args.parser)
+            # Compute all needed page indices upfront
+            needed_pages = [target_page]
+            for offset in range(1, args.context_pages + 1):
+                for page_idx in [target_page - offset, target_page + offset]:
+                    if page_idx >= 0:
+                        needed_pages.append(page_idx)
+
+            # Parse all needed pages in one batch
+            parsed = parse_pages(pdf_path, needed_pages, args.parser)
+
+            target_text = parsed.get(target_page)
             if not target_text:
                 errors += 1
                 continue
 
-            # Build chunks: target page + surrounding context pages
+            # Build chunks: target page first, then context pages
             chunks = [{
                 "text": target_text,
                 "metadata": {
@@ -221,24 +264,21 @@ def main():
                 },
             }]
 
-            for offset in range(1, args.context_pages + 1):
-                for page_idx in [target_page - offset, target_page + offset]:
-                    if page_idx < 0:
-                        continue
-                    text = parse_page(pdf_path, page_idx, args.parser)
-                    if text:
-                        chunks.append({
-                            "text": text,
-                            "metadata": {
-                                "filename": pdf_path.name,
-                                "state": state.lower(),
-                                "city": city.lower().replace(" ", "_"),
-                                "year": year,
-                                "page": page_idx,
-                                "parser": args.parser,
-                                "has_table": "|" in text,
-                            },
-                        })
+            for page_idx in needed_pages[1:]:
+                text = parsed.get(page_idx)
+                if text:
+                    chunks.append({
+                        "text": text,
+                        "metadata": {
+                            "filename": pdf_path.name,
+                            "state": state.lower(),
+                            "city": city.lower().replace(" ", "_"),
+                            "year": year,
+                            "page": page_idx,
+                            "parser": args.parser,
+                            "has_table": "|" in text,
+                        },
+                    })
 
             cache.append({
                 "state": state,
