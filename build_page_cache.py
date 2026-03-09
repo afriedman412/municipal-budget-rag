@@ -1,7 +1,7 @@
-"""Build a gold chunk cache from PDF pages directly (no ChromaDB needed).
+"""Build a gold chunk cache from PDF pages directly.
 
-Parses each PDF page-by-page with the specified parser, then builds a cache
-in the same format as build_gold_set.py so test_llm_extraction.py can use it.
+No ChromaDB, no Aryn, no OpenAI, no embeddings needed.
+Parses PDFs page-by-page, builds a cache compatible with test_llm_extraction.py.
 
 Usage:
   python build_page_cache.py --parser marker
@@ -12,12 +12,14 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sqlite3
-import sys
 import time
+from pathlib import Path
 
-from paths import TRAINING_DIR, PDF_DIR
-from pipeline.parsers import parse_page_text
+
+PDF_DIR = Path("pdfs_2026")
+TRAINING_DIR = Path("training")
 
 
 def find_pdf(state, city, year):
@@ -30,13 +32,107 @@ def find_pdf(state, city, year):
     return None
 
 
+def parse_page_pymupdf(pdf_path, page_idx):
+    import fitz
+    doc = fitz.open(str(pdf_path))
+    try:
+        if page_idx < 0 or page_idx >= len(doc):
+            return None
+        text = doc[page_idx].get_text()
+        return re.sub(r'\n{3,}', '\n\n', text).strip()
+    finally:
+        doc.close()
+
+
+_marker_converter = None
+
+
+def parse_page_marker(pdf_path, page_idx):
+    """Parse a single page with Marker. Caches the converter across calls."""
+    global _marker_converter
+    if _marker_converter is None:
+        from marker.converters.pdf import PdfConverter
+        from marker.config.parser import ConfigParser
+        from marker.models import create_model_dict
+        config_parser = ConfigParser({"output_format": "markdown"})
+        _marker_converter = PdfConverter(
+            config=config_parser.generate_config_dict(),
+            artifact_dict=create_model_dict(),
+            processor_list=config_parser.get_processors(),
+            renderer=config_parser.get_renderer(),
+        )
+
+    from marker.output import text_from_rendered
+    rendered = _marker_converter(str(pdf_path))
+    full_text, _, _ = text_from_rendered(rendered)
+
+    # Split on page breaks
+    if "\n\n---\n\n" in full_text:
+        pages = full_text.split("\n\n---\n\n")
+    else:
+        pages = [full_text]
+
+    if page_idx < 0 or page_idx >= len(pages):
+        return None
+    return pages[page_idx].strip() or None
+
+
+# Cache entire PDF parse results to avoid re-parsing for each page
+_pdf_cache = {}
+
+
+def parse_page(pdf_path, page_idx, parser):
+    """Parse a single page, with per-PDF caching for Marker."""
+    if parser == "pymupdf":
+        return parse_page_pymupdf(pdf_path, page_idx)
+    elif parser == "marker":
+        key = str(pdf_path)
+        if key not in _pdf_cache:
+            # Parse entire PDF once, cache all pages
+            _pdf_cache[key] = _parse_all_pages_marker(pdf_path)
+        pages = _pdf_cache[key]
+        if page_idx < 0 or page_idx >= len(pages):
+            return None
+        return pages[page_idx]
+    else:
+        # Fallback to pipeline parser (needs pipeline deps)
+        from pipeline.parsers import parse_page_text
+        return parse_page_text(pdf_path, page_idx, parser=parser)
+
+
+def _parse_all_pages_marker(pdf_path):
+    """Parse all pages of a PDF with Marker. Returns list of page texts."""
+    global _marker_converter
+    if _marker_converter is None:
+        from marker.converters.pdf import PdfConverter
+        from marker.config.parser import ConfigParser
+        from marker.models import create_model_dict
+        config_parser = ConfigParser({"output_format": "markdown"})
+        _marker_converter = PdfConverter(
+            config=config_parser.generate_config_dict(),
+            artifact_dict=create_model_dict(),
+            processor_list=config_parser.get_processors(),
+            renderer=config_parser.get_renderer(),
+        )
+
+    from marker.output import text_from_rendered
+    rendered = _marker_converter(str(pdf_path))
+    full_text, _, _ = text_from_rendered(rendered)
+
+    if "\n\n---\n\n" in full_text:
+        pages = [p.strip() for p in full_text.split("\n\n---\n\n")]
+    else:
+        pages = [full_text.strip()]
+    return pages
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Build gold chunk cache from PDF pages (no ChromaDB)",
     )
     parser.add_argument(
         "--parser", "-p", default="pymupdf",
-        help="Parser to use (pymupdf, marker, pdfplumber, aryn)",
+        help="Parser to use (pymupdf, marker)",
     )
     parser.add_argument(
         "--test-only", action="store_true",
@@ -55,12 +151,14 @@ def main():
     output = args.output or str(
         TRAINING_DIR / f"gold_chunks_{args.parser}.json"
     )
+    TRAINING_DIR.mkdir(exist_ok=True)
 
     conn = sqlite3.connect("pipeline_state.db")
     conn.row_factory = sqlite3.Row
 
+    # Load test set keys if --test-only
+    test_keys = None
     if args.test_only:
-        # Use test_budgets.json if it exists
         test_file = TRAINING_DIR / "test_budgets.json"
         if test_file.exists():
             with open(test_file) as f:
@@ -68,8 +166,9 @@ def main():
                     (r["state"].lower(), r["city"].lower().replace(" ", "_"), r["year"])
                     for r in json.load(f)
                 }
+            print(f"Test set: {len(test_keys)} city/year combos")
         else:
-            test_keys = None
+            print(f"Warning: {test_file} not found, processing all records")
 
     rows = conn.execute("""
         SELECT state, city, year, expense, budget_type, budget, pdf_page
@@ -86,15 +185,12 @@ def main():
     errors = 0
     t0 = time.time()
 
-    # Cache parsed pages per PDF to avoid re-parsing
-    pdf_page_cache = {}
-
     for i, r in enumerate(rows):
         state, city, year = r["state"], r["city"], r["year"]
         expense = r["expense"]
         target_page = r["pdf_page"] - 1  # 0-indexed
 
-        if args.test_only and test_keys is not None:
+        if test_keys is not None:
             key = (state.lower(), city.lower().replace(" ", "_"), year)
             if key not in test_keys:
                 skipped_test += 1
@@ -105,20 +201,14 @@ def main():
             skipped_no_pdf += 1
             continue
 
-        pdf_key = str(pdf_path)
-
         try:
-            # Get target page
-            target_text = parse_page_text(pdf_path, target_page, parser=args.parser)
+            target_text = parse_page(pdf_path, target_page, args.parser)
             if not target_text:
                 errors += 1
                 continue
 
             # Build chunks: target page + surrounding context pages
-            chunks = []
-
-            # Target page as first chunk
-            chunks.append({
+            chunks = [{
                 "text": target_text,
                 "metadata": {
                     "filename": pdf_path.name,
@@ -128,16 +218,14 @@ def main():
                     "page": target_page,
                     "parser": args.parser,
                     "has_table": "|" in target_text,
-                    "is_target": True,
                 },
-            })
+            }]
 
-            # Add surrounding pages as context
             for offset in range(1, args.context_pages + 1):
                 for page_idx in [target_page - offset, target_page + offset]:
                     if page_idx < 0:
                         continue
-                    text = parse_page_text(pdf_path, page_idx, parser=args.parser)
+                    text = parse_page(pdf_path, page_idx, args.parser)
                     if text:
                         chunks.append({
                             "text": text,
@@ -149,7 +237,6 @@ def main():
                                 "page": page_idx,
                                 "parser": args.parser,
                                 "has_table": "|" in text,
-                                "is_target": False,
                             },
                         })
 
@@ -171,6 +258,9 @@ def main():
         if (i + 1) % 20 == 0:
             elapsed = time.time() - t0
             print(f"  {len(cache)} cached, {i + 1}/{len(rows)} processed... ({elapsed:.0f}s)")
+
+    # Clear PDF cache to free memory
+    _pdf_cache.clear()
 
     with open(output, "w") as f:
         json.dump(cache, f)
