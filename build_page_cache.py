@@ -59,7 +59,31 @@ def parse_page_pymupdf(pdf_path, page_idx):
         doc.close()
 
 
+def _html_to_text(html):
+    """Simple HTML to text conversion, preserving table structure."""
+    if "<table" in html:
+        return _html_table_to_markdown(html)
+    text = re.sub(r"<[^>]+>", "", html)
+    return text.strip()
+
+
+def _html_table_to_markdown(html):
+    """Convert an HTML table to markdown format."""
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
+    if not rows:
+        return re.sub(r"<[^>]+>", "", html)
+    md_lines = []
+    for i, row in enumerate(rows):
+        cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.DOTALL)
+        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in cells]
+        md_lines.append("| " + " | ".join(cells) + " |")
+        if i == 0:
+            md_lines.append("| " + " | ".join("---" for _ in cells) + " |")
+    return "\n".join(md_lines)
+
+
 _marker_converter = None
+_marker_full_cache = {}  # pdf_path -> list of per-page texts
 
 
 def _get_marker_converter():
@@ -69,7 +93,7 @@ def _get_marker_converter():
         from marker.converters.pdf import PdfConverter
         from marker.config.parser import ConfigParser
         from marker.models import create_model_dict
-        config_parser = ConfigParser({"output_format": "markdown"})
+        config_parser = ConfigParser({"output_format": "json"})
         _marker_converter = PdfConverter(
             config=config_parser.generate_config_dict(),
             artifact_dict=create_model_dict(),
@@ -113,37 +137,37 @@ def _extract_pages_to_temp_pdf(pdf_path, page_indices):
 
 
 def _parse_marker_pages(pdf_path, page_indices):
-    """Parse specific pages with Marker by extracting them one at a time.
+    """Parse specific pages with Marker by running on the full PDF once.
     Returns dict mapping original page index -> parsed text.
 
-    We parse each page individually because Marker's page separators (---)
-    are unreliable when processing multi-page PDFs — it may merge pages
-    or skip separators, breaking the page mapping."""
+    Marker's rendered output maintains page structure via rendered.children,
+    where each child corresponds to a PDF page with its own block children."""
     converter = _get_marker_converter()
-    from marker.output import text_from_rendered
 
-    result = {}
-    for orig_idx in page_indices:
-        tmp_path, page_map = _extract_pages_to_temp_pdf(
-            pdf_path, [orig_idx],
-        )
-        if tmp_path is None:
-            continue
-
+    key = str(pdf_path)
+    if key not in _marker_full_cache:
         try:
-            rendered = converter(tmp_path)
-            full_text, _, _ = text_from_rendered(rendered)
-            text = full_text.strip()
-            if text:
-                result[orig_idx] = text
+            rendered = converter(str(pdf_path))
+            # rendered.children[i] = page i, each with .children blocks
+            page_texts = []
+            for page in rendered.children:
+                parts = []
+                for block in page.children:
+                    html = getattr(block, "html", "") or ""
+                    text = _html_to_text(html) if html.strip() else ""
+                    if text.strip():
+                        parts.append(text.strip())
+                page_texts.append("\n\n".join(parts))
+            _marker_full_cache[key] = page_texts
         except Exception as e:
-            logger.warning(
-                "Marker failed on %s page %d: %s",
-                Path(pdf_path).name, orig_idx, e,
-            )
-        finally:
-            os.unlink(tmp_path)
+            logger.warning("Marker failed on %s: %s", Path(pdf_path).name, e)
+            _marker_full_cache[key] = []
 
+    page_texts = _marker_full_cache[key]
+    result = {}
+    for idx in page_indices:
+        if 0 <= idx < len(page_texts) and page_texts[idx].strip():
+            result[idx] = page_texts[idx]
     return result
 
 
