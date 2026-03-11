@@ -324,6 +324,12 @@ def generate_chunk_cache_examples(f, cache_path, n_chunks_per_example, n_example
 
 
 def main():
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--n", type=int, default=500,
                         help="Number of PDF-based training examples to generate")

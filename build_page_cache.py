@@ -11,12 +11,15 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import re
 import sqlite3
 import tempfile
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 PDF_DIR = Path("pdfs_2026")
@@ -33,13 +36,24 @@ def find_pdf(state, city, year):
     return None
 
 
+def _check_mupdf_warnings(pdf_path):
+    """Log any MuPDF warnings that accumulated."""
+    import fitz
+    warnings = fitz.TOOLS.mupdf_warnings()
+    if warnings:
+        logger.warning("MuPDF [%s]: %s", Path(pdf_path).name, warnings)
+        fitz.TOOLS.mupdf_warnings(reset=True)
+
+
 def parse_page_pymupdf(pdf_path, page_idx):
     import fitz
+    fitz.TOOLS.mupdf_warnings(reset=True)
     doc = fitz.open(str(pdf_path))
     try:
         if page_idx < 0 or page_idx >= len(doc):
             return None
         text = doc[page_idx].get_text()
+        _check_mupdf_warnings(pdf_path)
         return re.sub(r'\n{3,}', '\n\n', text).strip()
     finally:
         doc.close()
@@ -69,6 +83,7 @@ def _extract_pages_to_temp_pdf(pdf_path, page_indices):
     """Use PyMuPDF to extract specific pages into a temp PDF. Returns (temp_path, page_map).
     page_map maps original page index -> index in temp PDF."""
     import fitz
+    fitz.TOOLS.mupdf_warnings(reset=True)
     doc = fitz.open(str(pdf_path))
     try:
         # Filter to valid pages and deduplicate, preserving order
@@ -91,38 +106,45 @@ def _extract_pages_to_temp_pdf(pdf_path, page_indices):
         tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
         new_doc.save(tmp.name)
         new_doc.close()
+        _check_mupdf_warnings(pdf_path)
         return tmp.name, page_map
     finally:
         doc.close()
 
 
 def _parse_marker_pages(pdf_path, page_indices):
-    """Parse specific pages with Marker by extracting them to a temp PDF first.
-    Returns dict mapping original page index -> parsed text."""
+    """Parse specific pages with Marker by extracting them one at a time.
+    Returns dict mapping original page index -> parsed text.
+
+    We parse each page individually because Marker's page separators (---)
+    are unreliable when processing multi-page PDFs — it may merge pages
+    or skip separators, breaking the page mapping."""
     converter = _get_marker_converter()
     from marker.output import text_from_rendered
 
-    tmp_path, page_map = _extract_pages_to_temp_pdf(pdf_path, page_indices)
-    if tmp_path is None:
-        return {}
+    result = {}
+    for orig_idx in page_indices:
+        tmp_path, page_map = _extract_pages_to_temp_pdf(
+            pdf_path, [orig_idx],
+        )
+        if tmp_path is None:
+            continue
 
-    try:
-        rendered = converter(tmp_path)
-        full_text, _, _ = text_from_rendered(rendered)
+        try:
+            rendered = converter(tmp_path)
+            full_text, _, _ = text_from_rendered(rendered)
+            text = full_text.strip()
+            if text:
+                result[orig_idx] = text
+        except Exception as e:
+            logger.warning(
+                "Marker failed on %s page %d: %s",
+                Path(pdf_path).name, orig_idx, e,
+            )
+        finally:
+            os.unlink(tmp_path)
 
-        if "\n\n---\n\n" in full_text:
-            parsed_pages = [p.strip() for p in full_text.split("\n\n---\n\n")]
-        else:
-            parsed_pages = [full_text.strip()]
-
-        # Map back to original page indices
-        result = {}
-        for orig_idx, temp_idx in page_map.items():
-            if temp_idx < len(parsed_pages) and parsed_pages[temp_idx]:
-                result[orig_idx] = parsed_pages[temp_idx]
-        return result
-    finally:
-        os.unlink(tmp_path)
+    return result
 
 
 # Cache parsed pages per PDF (key: pdf_path, value: {page_idx: text})
@@ -160,6 +182,11 @@ def parse_pages(pdf_path, page_indices, parser):
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+
     parser = argparse.ArgumentParser(
         description="Build gold chunk cache from PDF pages (no ChromaDB)",
     )
