@@ -12,8 +12,8 @@ Usage:
 import argparse
 import random
 import sqlite3
-import subprocess
-import sys
+
+import boto3
 
 from config import PDF_DIR
 
@@ -23,28 +23,30 @@ S3_REGION = "us-east-2"
 
 def find_s3_key(state, city, year, s3_files):
     """Find matching S3 key for a city/year."""
-    prefix = f"{state.lower()}_{city.lower().replace(' ', '_')}_{str(year)[2:]}"
+    prefix = (
+        f"{state.lower()}_"
+        f"{city.lower().replace(' ', '_')}_"
+        f"{str(year)[2:]}"
+    )
     matches = [k for k in s3_files if k.startswith(prefix)]
     return matches[0] if matches else None
 
 
 def list_s3_files():
     """List all PDFs in the S3 bucket."""
-    result = subprocess.run(
-        ["aws", "s3", "ls", f"s3://{S3_BUCKET}/", "--region", S3_REGION],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"Error listing S3 bucket: {result.stderr}", file=sys.stderr)
-        sys.exit(1)
-    # Parse "2024-01-15 12:00:00  12345 filename.pdf" lines
+    s3 = boto3.client("s3", region_name=S3_REGION)
     files = []
-    for line in result.stdout.strip().split("\n"):
-        if line.strip():
-            parts = line.split()
-            if len(parts) >= 4:
-                files.append(parts[-1])
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=S3_BUCKET):
+        for obj in page.get("Contents", []):
+            files.append(obj["Key"])
     return files
+
+
+def download_file(key, local_path):
+    """Download a single file from S3."""
+    s3 = boto3.client("s3", region_name=S3_REGION)
+    s3.download_file(S3_BUCKET, key, str(local_path))
 
 
 def main():
@@ -128,17 +130,12 @@ def main():
         if local_path.exists():
             downloaded += 1
             continue
-        result = subprocess.run(
-            ["aws", "s3", "cp", f"s3://{S3_BUCKET}/{key}", str(local_path),
-             "--region", S3_REGION],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
+        try:
+            download_file(key, local_path)
             downloaded += 1
-        else:
+        except Exception as e:
             errors += 1
-            print(f"  Error: {key}: "
-                  f"{result.stderr.strip()}")
+            print(f"  Error: {key}: {e}")
 
         if (i + 1) % 25 == 0:
             print(f"  {i + 1}/{len(to_download)} done...")
