@@ -96,6 +96,38 @@ def main():
     report_to = "none" if args.no_wandb else "wandb"
     run_name = args.output if not args.no_wandb else None
 
+    # Log training data as input artifact in W&B
+    if not args.no_wandb:
+        import wandb
+        if wandb.run is None:
+            wandb.init(
+                project=args.wandb_project,
+                name=run_name,
+                job_type="finetune",
+                config={
+                    "model": args.model,
+                    "epochs": args.epochs,
+                    "lr": args.lr,
+                    "lora_r": args.lora_r,
+                    "lora_alpha": args.lora_alpha or args.lora_r * 2,
+                    "warmup": args.warmup,
+                    "packing": args.packing,
+                    "max_seq_len": args.max_seq_len,
+                    "batch_size": args.batch_size,
+                    "grad_accum": args.grad_accum,
+                    "data": args.data,
+                    "n_examples": len(dataset),
+                },
+            )
+        # Link training data artifact if it exists
+        try:
+            artifact = wandb.use_artifact(
+                f"training-data-*:latest", type="dataset",
+            )
+            print(f"  Linked W&B artifact: {artifact.name}")
+        except Exception:
+            pass  # No artifact yet, that's fine
+
     print(f"Training for {args.epochs} epochs... (W&B: {report_to})")
     trainer = SFTTrainer(
         model=model,

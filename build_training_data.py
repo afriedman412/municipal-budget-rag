@@ -19,15 +19,17 @@ Usage:
 """
 
 import argparse
+from datetime import datetime
 import json
 import os
+from pathlib import Path
 import random
 import re
 import sqlite3
 import time
 
+from build_page_cache import parse_pages
 from paths import TRAINING_DIR, PDF_DIR
-from pipeline.parsers import parse_page_text
 
 SYSTEM_PROMPT = """You are a municipal budget analyst. You will be given excerpts from a municipal budget document and asked to extract a specific expenditure amount. Follow these rules:
 - Return EXPENDITURES only — never revenue or income figures
@@ -176,28 +178,38 @@ def build_example(record, chunk_text):
 
 
 def generate_pdf_examples(f, sample, args_distractors, text_parser="pymupdf"):
-    """Generate training examples from PDFs. Writes to file handle f."""
+    """Generate training examples from PDFs. Writes to file handle f.
+    Returns (count, skipped, errors, manifest) where manifest is a list of dicts."""
     count = 0
     skipped = 0
     errors = 0
+    manifest = []
     t0 = time.time()
 
     for i, (record, pdf_path) in enumerate(sample):
         try:
             target_page = record["pdf_page"] - 1  # Convert to 0-indexed
 
-            target_text = parse_page_text(pdf_path, target_page, parser=text_parser)
+            distractor_pages = pick_distractors(
+                pdf_path, target_page, args_distractors,
+            )
+
+            # Batch-parse target + distractors in one call
+            all_pages = [target_page] + distractor_pages
+            parsed = parse_pages(pdf_path, all_pages, text_parser)
+
+            target_text = parsed.get(target_page)
             if not target_text:
                 skipped += 1
                 continue
 
-            distractor_pages = pick_distractors(pdf_path, target_page, args_distractors)
-
+            used_distractor_pages = []
             distractor_texts = []
             for dp in distractor_pages:
-                text = parse_page_text(pdf_path, dp, parser=text_parser)
+                text = parsed.get(dp)
                 if text:
                     distractor_texts.append(text)
+                    used_distractor_pages.append(dp)
 
             all_chunks = [(target_text, "target")] + [(t, "distractor") for t in distractor_texts]
             random.shuffle(all_chunks)
@@ -212,6 +224,17 @@ def generate_pdf_examples(f, sample, args_distractors, text_parser="pymupdf"):
             f.flush()
             count += 1
 
+            manifest.append({
+                "state": record["state"],
+                "city": record["city"],
+                "year": record["year"],
+                "expense": record["expense"],
+                "pdf": pdf_path.name,
+                "target_page": target_page,
+                "distractor_pages": used_distractor_pages,
+                "parser": text_parser,
+            })
+
         except Exception as e:
             errors += 1
             print(f"  ERROR on {record['state']} {record['city']} {record['year']}: {e}")
@@ -221,7 +244,7 @@ def generate_pdf_examples(f, sample, args_distractors, text_parser="pymupdf"):
             elapsed = time.time() - t0
             print(f"  [PDF] {i + 1}/{len(sample)} processed, {count} written... ({elapsed:.0f}s elapsed)")
 
-    return count, skipped, errors
+    return count, skipped, errors, manifest
 
 
 def generate_chunk_cache_examples(f, cache_path, n_chunks_per_example, n_examples=None):
@@ -275,22 +298,39 @@ def main():
                         help="Cached chunks file(s) to generate examples from (can repeat)")
     parser.add_argument("--chunks-only", type=str, action="append", default=[],
                         help="Like --chunks-cache but skips PDF-based examples entirely")
-    parser.add_argument("--parser", choices=["pymupdf", "pdfplumber", "aryn"], default="pymupdf",
+    parser.add_argument("--parser",
+                        choices=["pymupdf", "pdfplumber", "aryn", "marker"],
+                        default="pymupdf",
                         help="PDF text extraction parser (default: pymupdf)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility")
-    parser.add_argument("--output", default=str(TRAINING_DIR / "training_data.jsonl"),
-                        help="Output file")
+    parser.add_argument("--output-dir", default=None,
+                        help="Output directory (default: training/YYYYMMDD_HHMMSS)")
+    parser.add_argument("--wandb-project", default="muni-budget-rag",
+                        help="W&B project name")
+    parser.add_argument("--no-wandb", action="store_true",
+                        help="Disable W&B logging")
     args = parser.parse_args()
 
     random.seed(args.seed)
+
+    # Create timestamped output directory
+    if args.output_dir:
+        run_dir = Path(args.output_dir)
+    else:
+        run_dir = TRAINING_DIR / datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = run_dir / "training_data.jsonl"
+    manifest_path = run_dir / "manifest.json"
 
     all_chunk_caches = args.chunks_cache + args.chunks_only
     skip_pdfs = len(args.chunks_only) > 0 and len(args.chunks_cache) == 0
 
     total_count = 0
+    all_manifest = []
 
-    with open(args.output, "w") as f:
+    with open(output_path, "w") as f:
 
         # --- PDF-based examples ---
         if not skip_pdfs:
@@ -327,8 +367,9 @@ def main():
 
             random.shuffle(sample)
 
-            count, skipped, errors = generate_pdf_examples(f, sample, args.distractors, text_parser=args.parser)
+            count, skipped, errors, manifest = generate_pdf_examples(f, sample, args.distractors, text_parser=args.parser)
             total_count += count
+            all_manifest.extend(manifest)
             print(f"  PDF: {count} examples ({skipped} skipped, {errors} errors)")
 
         # --- Chunk-cache-based examples ---
@@ -338,8 +379,62 @@ def main():
             total_count += count
             print(f"  Cache: {count} examples from {cache_path}")
 
+    # Save training manifest
+    manifest_data = {
+        "created": datetime.now().isoformat(),
+        "n_examples": total_count,
+        "parser": args.parser,
+        "distractors": args.distractors,
+        "seed": args.seed,
+        "chunk_caches": all_chunk_caches,
+    }
+    if all_manifest:
+        manifest_data["pdfs_used"] = sorted(set(m["pdf"] for m in all_manifest))
+        manifest_data["examples"] = all_manifest
+
+    with open(manifest_path, "w") as mf:
+        json.dump(manifest_data, mf, indent=2)
+
     print(f"\nTotal: {total_count} training examples")
-    print(f"Saved to {args.output}")
+    print(f"Saved to {run_dir}/")
+    print(f"  training_data.jsonl ({total_count} examples)")
+    n_pdfs = len(set(m["pdf"] for m in all_manifest)) if all_manifest else 0
+    print(f"  manifest.json ({len(all_manifest)} PDF examples, "
+          f"{n_pdfs} unique PDFs)")
+
+    # Log to W&B
+    if not args.no_wandb:
+        try:
+            import wandb
+            run = wandb.init(
+                project=args.wandb_project,
+                job_type="build-training-data",
+                config={
+                    "parser": args.parser,
+                    "distractors": args.distractors,
+                    "seed": args.seed,
+                    "n_requested": args.n,
+                    "n_examples": total_count,
+                    "n_pdfs": n_pdfs,
+                    "chunk_caches": all_chunk_caches,
+                },
+            )
+            artifact = wandb.Artifact(
+                f"training-data-{args.parser}",
+                type="dataset",
+                metadata={
+                    "parser": args.parser,
+                    "n_examples": total_count,
+                    "n_pdfs": n_pdfs,
+                },
+            )
+            artifact.add_file(str(output_path))
+            artifact.add_file(str(manifest_path))
+            run.log_artifact(artifact)
+            run.finish()
+            print(f"  Logged to W&B: {args.wandb_project}")
+        except ImportError:
+            print("  wandb not installed, skipping")
 
 
 if __name__ == "__main__":
