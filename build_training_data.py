@@ -179,70 +179,107 @@ def build_example(record, chunk_text):
 
 def generate_pdf_examples(f, sample, args_distractors, text_parser="pymupdf"):
     """Generate training examples from PDFs. Writes to file handle f.
-    Returns (count, skipped, errors, manifest) where manifest is a list of dicts."""
+    Returns (count, skipped, errors, manifest) where manifest is a list of dicts.
+
+    Groups records by PDF so all needed pages are batch-parsed once,
+    avoiding redundant parsing when GF and Police share a PDF.
+    """
+    from collections import defaultdict
+
     count = 0
     skipped = 0
     errors = 0
     manifest = []
     t0 = time.time()
 
-    for i, (record, pdf_path) in enumerate(sample):
+    # Group records by PDF path
+    by_pdf = defaultdict(list)
+    for record, pdf_path in sample:
+        by_pdf[str(pdf_path)].append((record, pdf_path))
+
+    processed = 0
+    for pdf_key, records in by_pdf.items():
+        pdf_path = records[0][1]
+
         try:
-            target_page = record["pdf_page"] - 1  # Convert to 0-indexed
+            # Pick distractors for each record's target page
+            record_plans = []
+            all_needed_pages = set()
+            for record, _ in records:
+                target_page = record["pdf_page"] - 1
+                distractors = pick_distractors(
+                    pdf_path, target_page, args_distractors,
+                )
+                record_plans.append((record, target_page, distractors))
+                all_needed_pages.add(target_page)
+                all_needed_pages.update(distractors)
 
-            distractor_pages = pick_distractors(
-                pdf_path, target_page, args_distractors,
+            # Batch-parse all pages for this PDF at once
+            parsed = parse_pages(
+                pdf_path, list(all_needed_pages), text_parser,
             )
 
-            # Batch-parse target + distractors in one call
-            all_pages = [target_page] + distractor_pages
-            parsed = parse_pages(pdf_path, all_pages, text_parser)
+            # Generate examples from parsed pages
+            for record, target_page, distractors in record_plans:
+                target_text = parsed.get(target_page)
+                if not target_text:
+                    skipped += 1
+                    processed += 1
+                    continue
 
-            target_text = parsed.get(target_page)
-            if not target_text:
-                skipped += 1
-                continue
+                used_distractor_pages = []
+                distractor_texts = []
+                for dp in distractors:
+                    text = parsed.get(dp)
+                    if text:
+                        distractor_texts.append(text)
+                        used_distractor_pages.append(dp)
 
-            used_distractor_pages = []
-            distractor_texts = []
-            for dp in distractor_pages:
-                text = parsed.get(dp)
-                if text:
-                    distractor_texts.append(text)
-                    used_distractor_pages.append(dp)
+                all_chunks = (
+                    [(target_text, "target")]
+                    + [(t, "distractor") for t in distractor_texts]
+                )
+                random.shuffle(all_chunks)
 
-            all_chunks = [(target_text, "target")] + [(t, "distractor") for t in distractor_texts]
-            random.shuffle(all_chunks)
+                chunk_text = "\n\n".join(
+                    f"[Page {j+1}]\n{text}"
+                    for j, (text, _) in enumerate(all_chunks)
+                )
 
-            chunk_text = "\n\n".join(
-                f"[Page {j+1}]\n{text}"
-                for j, (text, _) in enumerate(all_chunks)
-            )
+                example = build_example(record, chunk_text)
+                f.write(json.dumps(example) + "\n")
+                f.flush()
+                count += 1
 
-            example = build_example(record, chunk_text)
-            f.write(json.dumps(example) + "\n")
-            f.flush()
-            count += 1
+                manifest.append({
+                    "state": record["state"],
+                    "city": record["city"],
+                    "year": record["year"],
+                    "expense": record["expense"],
+                    "pdf": pdf_path.name,
+                    "target_page": target_page,
+                    "distractor_pages": used_distractor_pages,
+                    "parser": text_parser,
+                })
 
-            manifest.append({
-                "state": record["state"],
-                "city": record["city"],
-                "year": record["year"],
-                "expense": record["expense"],
-                "pdf": pdf_path.name,
-                "target_page": target_page,
-                "distractor_pages": used_distractor_pages,
-                "parser": text_parser,
-            })
+                processed += 1
 
         except Exception as e:
-            errors += 1
-            print(f"  ERROR on {record['state']} {record['city']} {record['year']}: {e}")
+            for record, _ in records:
+                errors += 1
+                processed += 1
+            print(f"  ERROR on {pdf_path.name}: {e}")
             continue
 
-        if (i + 1) % 50 == 0:
+        if processed >= 50 and processed % 50 < len(records):
             elapsed = time.time() - t0
-            print(f"  [PDF] {i + 1}/{len(sample)} processed, {count} written... ({elapsed:.0f}s elapsed)")
+            print(f"  [PDF] {processed}/{len(sample)} processed, "
+                  f"{count} written, "
+                  f"{len(by_pdf)} PDFs... ({elapsed:.0f}s)")
+
+    elapsed = time.time() - t0
+    print(f"  [PDF] Parsed {len(by_pdf)} unique PDFs "
+          f"for {len(sample)} records ({elapsed:.0f}s)")
 
     return count, skipped, errors, manifest
 
