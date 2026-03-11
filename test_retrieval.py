@@ -52,10 +52,19 @@ def format_budget(amount):
     return f"${amount:,.0f}"
 
 
-def parse_marker_blocks(pdf_path):
+# Block types to exclude from retrieval — short metadata blocks that
+# win cosine similarity over actual budget content
+SKIP_BLOCK_TYPES = {"SectionHeader", "PageHeader", "PageFooter", "Caption", "Footnote"}
+
+
+def parse_marker_blocks(pdf_path, skip_types=None):
     """Parse a PDF with Marker, returning individual blocks with metadata.
-    Returns list of {text, page, block_idx, block_type}."""
+    Returns list of {text, page, block_idx, block_type}.
+    Filters out block types in skip_types (default: SKIP_BLOCK_TYPES)."""
     from build_page_cache import _get_marker_converter, _html_to_text
+
+    if skip_types is None:
+        skip_types = SKIP_BLOCK_TYPES
 
     converter = _get_marker_converter()
     rendered = converter(str(pdf_path))
@@ -66,15 +75,17 @@ def parse_marker_blocks(pdf_path):
             html = getattr(block, "html", "") or ""
             if not html.strip():
                 continue
-            text = _html_to_text(html)
-            if not text.strip():
+            block_type = str(getattr(block, "block_type", "unknown"))
+            if block_type in skip_types:
                 continue
-            block_type = getattr(block, "block_type", "unknown")
+            text = _html_to_text(html)
+            if not text.strip() or len(text.strip()) < 200:
+                continue
             blocks.append({
                 "text": text.strip(),
                 "page": page_idx,
                 "block_idx": block_idx,
-                "block_type": str(block_type),
+                "block_type": block_type,
             })
     return blocks
 
@@ -159,6 +170,8 @@ def main():
                         help="Number of chunks to retrieve (default: 3)")
     parser.add_argument("--limit", type=int, default=0,
                         help="Limit to N PDFs (0 = all)")
+    parser.add_argument("--no-filter", action="store_true",
+                        help="Don't filter out extraneous block types")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -220,7 +233,8 @@ def main():
         # Parse into chunks
         if args.parser == "marker":
             if args.granularity == "block":
-                chunks = parse_marker_blocks(pdf_path)
+                skip = None if args.no_filter else SKIP_BLOCK_TYPES
+                chunks = parse_marker_blocks(pdf_path, skip_types=skip)
             else:
                 chunks = parse_marker_pages(pdf_path)
         else:

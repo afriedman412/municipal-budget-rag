@@ -134,11 +134,33 @@ Code transfer to VM via GitHub + deploy keys.
 
 ## Current State
 
+### Active Experiment: Retrieval Quality on Marker Blocks vs Pages
+Testing whether embedding-based retrieval on Marker-parsed content can find the right budget data without fine-tuning. Early results show block-level retrieval (Marker's individual blocks: tables, paragraphs, headers) is too granular — short section headers win cosine similarity over actual budget tables because they have better keyword overlap with the query. Page-level retrieval is expected to work better.
+
+**Run on VM** (requires Marker GPU):
+```bash
+# Test marker block-level retrieval (initial results: poor — headers beat tables)
+python test_retrieval.py --parser marker --granularity block --limit 5 -v
+
+# Test marker page-level retrieval (expected better)
+python test_retrieval.py --parser marker --granularity page --limit 5 -v
+
+# Compare with pymupdf page-level
+python test_retrieval.py --parser pymupdf --limit 5 -v
+
+# Full run (all local PDFs)
+python test_retrieval.py --parser marker --granularity page
+```
+
+**Key question**: If page-level retrieval hits well, can a base model (no fine-tuning) extract the budget number from the retrieved page? This could eliminate the need for fine-tuning entirely.
+
 ### Data
-- **~103 PDFs ingested** across ~50 states
+- **~56 PDFs on VM** in `pdfs_2026/` (sampled from S3 via `sample_pdfs.py`)
+- **~1405 PDFs in S3** bucket `budget-pdf-depot` (us-east-2)
 - **ChromaDB collections** (local persistent, `chroma_data/`): `budgets-aryn` (9390), `budgets-pymupdf` (10075), `budgets-llamaparse` (1779), `budgets-unstructured` (1067)
 - **Ground truth DB**: SQLite `pipeline_state.db` → `validation` table with 6,126 records across 485 cities
   - Schema: `(state TEXT, city TEXT, year INTEGER, expense TEXT, budget_type TEXT, budget REAL, doc_page TEXT, pdf_page INTEGER)`
+  - 2,757 city/year combos have `pdf_page` set
 - **60 validation records** in test chunk cache files, per parser (test split)
 
 ### Test Set
@@ -178,10 +200,14 @@ System prompt includes these extraction rules (in both `test_llm_extraction.py` 
    - Uses `pdf_page` column to find the page with the correct answer
    - Configurable distractor pages per example (simulates noisy retrieval)
    - Stratified sampling: balanced General Fund + Police
+   - Supports `--parser marker|pymupdf|aryn` for parser selection
+   - Outputs to timestamped `training/YYYYMMDD_HHMMSS/` directories with manifest
+   - W&B artifact logging with `--wandb-project`
 2. **`finetune.py`** — LoRA fine-tuning with unsloth + trl
    - Mistral 7B in 4-bit, LoRA on all attention + MLP layers
    - Key params: epochs, lr, lora-r, lora-alpha, warmup, packing
    - Saves LoRA adapter + merged 16-bit model for vLLM serving
+   - Links W&B training data artifacts
 3. **`training/training_data_d4.jsonl`** — Current training data (4 distractors)
 
 ### Fine-tuning History
@@ -191,12 +217,15 @@ System prompt includes these extraction rules (in both `test_llm_extraction.py` 
 | V7 | 5 | 1e-4 | 32 | 4 | 88% | 81% |
 
 ### Key Scripts
+- `test_retrieval.py` — Test embedding retrieval quality (marker blocks vs pages vs pymupdf). Runs on VM.
+- `build_page_cache.py` — Parse PDFs into page-level chunks (pymupdf or marker). Marker now parses full PDF once, indexes `rendered.children` for pages.
+- `build_training_data.py` — Generate fine-tuning JSONL from validation table + PDFs. Timestamped output + manifest + W&B.
+- `sample_pdfs.py` — Download random PDFs from S3 that have ground truth (uses boto3)
+- `test_llm_extraction.py` — Test LLM extraction on cached chunks (runs on VM). Supports `--samples N` for majority vote
+- `run_test_suite.py` — Run all test suites, print summary grid
+- `finetune.py` — LoRA fine-tune Mistral 7B on budget extraction
 - `process_local.py` — Parse local PDFs → embed → index into parser-specific ChromaDB collection
 - `build_gold_set.py` — Build gold validation set + cache chunks from all parser collections
-- `test_llm_extraction.py` — Test LLM extraction on cached chunks (runs on VM). Supports `--samples N` for majority vote
-- `run_test_suite.py` — Run all 6 test suites (pymupdf/aryn/pdfplumber x clean/d4), print summary grid
-- `build_training_data.py` — Generate fine-tuning JSONL from validation table + PDFs
-- `finetune.py` — LoRA fine-tune Mistral 7B on budget extraction
 - `test_parser.py` — Quick parser quality test (number-in-text check) for multiple parsers
 - `validate_transfers.py` — Audit ground truth for transfer inclusion/exclusion
 - `analyze_results.py` — Analyze/compare test run JSON files
@@ -204,16 +233,21 @@ System prompt includes these extraction rules (in both `test_llm_extraction.py` 
 - `config.py` — Central config: test PDFs, parser list, paths, embedding params
 - `start_vm.sh` — Start GCP VM + launch vLLM + SSH session
 
+### Marker Parser Integration
+- **`build_page_cache.py`**: Marker converter uses JSON output format. Parses full PDF once per document, caches all pages via `_marker_full_cache`. `rendered.children[i]` = page i, each with `.children` blocks (paragraphs, tables, headers). Blocks have `.html` content and `.block_type` attribute.
+- **`pipeline/marker_parser.py`**: Pipeline integration for Marker. Same page→block structure.
+- **Block types**: SectionHeader, Table, Text, etc. Tables are converted to markdown format. Text blocks have HTML tags stripped.
+- **Key finding**: Block-level embedding retrieval fails because short headers (35 chars) beat large tables in cosine similarity. Page-level is the right granularity for retrieval.
+
 ### Parser Comparison (tested on 6-city parser test set)
 
 | Parser | Speed | Cost | Test Set Quality | Verdict |
 |--------|-------|------|-----------------|---------|
 | **Aryn** | Fast (cloud) | $2/1000 pages | **88% (best)** | **Use this** |
 | PyMuPDF | Instant | Free | 88% clean, 75% d4 | Good free option |
+| Marker | Fast (GPU) | Free (local GPU) | TBD (retrieval test in progress) | Promising |
 | LlamaParse | Fast (cloud) | Free tier 1K pg/day | 3/6 (50%) | Not worth it |
 | Unstructured | Very slow | Free tier | 2/6 (33%) | Too slow + errors |
-| Docling | Very slow | Free (GPU) | TBD | Too slow |
-| pdfplumber | Fast | Free | ~73% clean | Moderate |
 
 ### Known Issues
 - Biennial budgets (e.g., 2018-2019) cause confusion — avoid in test set
@@ -221,18 +255,22 @@ System prompt includes these extraction rules (in both `test_llm_extraction.py` 
 - Corvallis OR 2018 GF: stubborn miss across all models/parsers
 - Milwaukee WI, Eau Claire WI: consistently regress between model versions
 - Wrong_scope (~30 records) is the biggest error category — model picks All Funds instead of GF
+- Marker block-level retrieval doesn't work — headers dominate cosine similarity over tables
 
 ### GCP VM
 - Instance: muni-rag-420, zone us-central1-a, g2-standard-8, L4 GPU (24GB VRAM)
 - ~$0.90/hr — stop when done
-- VM venvs: `venv-vllm` (vLLM serving), `venv-finetune` (unsloth + openai + training)
+- VM venvs: `venv-vllm` (vLLM serving), `venv-finetune` (unsloth + openai + training + marker)
 - Models on VM: `budget-mistral-lora-v3/v4/v5/v6/v7-merged`
 - Serve: `vllm serve budget-mistral-lora-v7-merged --port 8000 --max-model-len 32768`
 - Code transfer via GitHub + deploy keys
+- AWS credentials needed for boto3 S3 access: set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `~/.bashrc`
 
 ### Next Steps
-1. **Retrain with updated prompt** — regenerate training data with GF-scope and transfer-exclusion rules
-2. **Address wrong_scope in training data** — ensure examples include pages with both All Funds and GF totals
+1. **Run page-level retrieval test** — `python test_retrieval.py --parser marker --granularity page` on VM
+2. **If retrieval works**: Test base Mistral on retrieved pages (no fine-tuning) — could skip fine-tuning entirely
+3. **If retrieval + base model works**: Simplify pipeline to just parse → embed → retrieve → extract
+4. **If not**: Retrain with Marker-parsed pages (V8), compare to pymupdf-trained V7
 
 ### Debugging Tips
 - Check status: `python -m pipeline status`
